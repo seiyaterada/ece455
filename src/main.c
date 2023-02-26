@@ -170,8 +170,8 @@ void writeBoard( uint32_t value )
 {
 	for(int i = 0; i<32;i++){
 			uint32_t nextBit = 0x1 & (value >> i);
-			GPIO_Write(GPIOC, nextBit);
-			GPIO_ToggleBits(GPIOC, GPIO_Pin_9);
+			GPIO_Write(GPIOB, nextBit);
+			GPIO_ToggleBits(GPIOB, GPIO_Pin_1);
 		}
 }
 
@@ -202,8 +202,8 @@ static void prvDisplayBoard(void *pvParameters) {
 
 		// Write to board
 		writeBoard(0xFFFFFFFF);
-//		GPIO_Write(GPIOC, 0xFFFFFFFF);
-//		GPIO_ToggleBits(GPIOC, GPIO_Pin_9);
+//		GPIO_Write(GPIOB, GPIO_Pin_0 & 0xFFFFFFFF);
+//		GPIO_ToggleBits(GPIOB, GPIO_Pin_1);
 
 
 
@@ -273,7 +273,6 @@ static void prvSetupHardware( void )
 	NVIC_SetPriorityGrouping( 0 );
 
 	GPIO_InitTypeDef Shift1;
-	GPIO_InitTypeDef Shift2;
 	GPIO_InitTypeDef Traffic_Lights;
 
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
@@ -284,17 +283,11 @@ static void prvSetupHardware( void )
 
 
 	Shift1.GPIO_Mode = GPIO_Mode_OUT;
-	Shift1.GPIO_Pin = GPIO_Pin_8 | GPIO_Pin_9;
-	Shift1.GPIO_OType = GPIO_OType_PP;
+	Shift1.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
+//	Shift1.GPIO_OType = GPIO_OType_PP;
 	Shift1.GPIO_PuPd = GPIO_PuPd_DOWN;
-	Shift1.GPIO_Speed = GPIO_Speed_2MHz;
-	GPIO_Init(GPIOC, &Shift1);
-
-	Shift2.GPIO_Mode = GPIO_Mode_AN;
-	Shift2.GPIO_Pin = GPIO_Pin_15 | GPIO_Pin_14;
-	Shift2.GPIO_OType = GPIO_OType_PP;
-	Shift2.GPIO_PuPd = GPIO_PuPd_DOWN;
-	GPIO_Init(GPIOC, &Shift2);
+//	Shift1.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_Init(GPIOB, &Shift1);
 
 	Traffic_Lights.GPIO_Mode = GPIO_Mode_OUT;
 	Traffic_Lights.GPIO_Pin = GPIO_Pin_2 ;
