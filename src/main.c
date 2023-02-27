@@ -151,6 +151,9 @@ static void prvCarTraffic( void *pvParameters );
 static void prvCarTrafficCreator( void *pvParameters );
 static void prvTrafficFlow( void *pvParameters );
 
+GPIO_InitTypeDef Shift1;
+GPIO_InitTypeDef Traffic_Lights;
+
 /*
  * The queue send and receive tasks as described in the comments at the top of
  * this file.
@@ -163,7 +166,9 @@ void writeBoard( uint32_t value )
 	for(int i = 0; i<32;i++){
 			uint32_t nextBit = 0x1 & (value >> i);
 			GPIO_Write(GPIOB, nextBit);
-			GPIO_ToggleBits(GPIOB, GPIO_Pin_1);
+//			GPIO_ToggleBits(GPIOB, GPIO_Pin_1);
+			GPIO_ResetBits(GPIOB, GPIO_Pin_1);
+			GPIO_SetBits(GPIOB, GPIO_Pin_1);
 		}
 }
 
@@ -240,15 +245,6 @@ uint32_t stopAdvanceCars(int newCar, uint32_t boardState) {
 int main(void)
 {
 	prvSetupHardware();
-	xMutexLight = xSemaphoreCreateMutex();
-	    if( xMutexLight == NULL )
-	    {
-	        printf("ERROR: LIGHT SEMAPHORE NOT CREATED. \n"); 	/* There was insufficient FreeRTOS heap available for the semaphore to be created successfully. */
-	    }
-	    else
-	    {
-	    	xSemaphoreGive( xMutexLight ); // need to give semaphore after it is defined
-	    }
 	xQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
 								sizeof( uint32_t ) );		/* The size of each item the queue holds. */
 	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
@@ -257,9 +253,9 @@ int main(void)
 										sizeof( uint16_t ) );		/* The size of each item the queue holds. */
 	vQueueAddToRegistry( xQueue, "MainQueue" );
 	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
-	u_int32_t defaultBoardState = (0xC0000000);
+	u_int32_t defaultBoardState = (0x80000000);
 	uint16_t defaultFlow = 0;
-	uint16_t defaultLight = TRAFFIC_RED;
+	uint16_t defaultLight = TRAFFIC_GREEN;
 
 	xQueueSend( xTrafficLightQueue, &defaultLight, 0);
 	xQueueSend( xQueue, &defaultBoardState, 0);
@@ -286,11 +282,11 @@ static void prvCarTrafficCreator(void *pvParameters) {
 
 		int prob = rand() % 4;
 		//car_value = (rand() % 100) < 100/(4 - flow);
-//		if(prob < flow) {
-//			boardstate = advanceCars(1, boardstate);
-//		} else {
-//			boardstate = advanceCars(0, boardstate);
-//		}
+		if(prob < flow) {
+			newCar = 1;
+		} else {
+			newCar = 0;
+		}
 
 		if(light == TRAFFIC_GREEN) {
 			boardstate = advanceCars(newCar, boardstate);
@@ -319,8 +315,6 @@ static void prvTrafficFlow(void *pvParameters) {
 	}
 }
 
-static void
-
 static void prvTrafficLight(void *pvParameters) {
 	xTimerHandle xTrafficLightTimer = NULL;
 
@@ -335,9 +329,9 @@ static void prvDisplayBoard(void *pvParameters) {
 		// Run every 10mx
 
 		vTaskDelay(100);
-//		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
-//		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
-//		GPIO_SetBits(GPIOD, TRAFFIC_RED);
+		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
+		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
+		GPIO_SetBits(GPIOD, TRAFFIC_RED);
 //		GPIO_SetBits(GPIOD, )
 
 		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
@@ -349,15 +343,15 @@ static void prvDisplayBoard(void *pvParameters) {
 	}
 }
 
-void vGreentLightTimer(xTimerHandle xTimer) {
-	GPIO_ResetBits(GPIOD, TRAFFIC_GREEN);
-	GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
-	
-	if(xSemaphoreTake(xMutexLight, (TickType_t)0) == pdTRUE) {
-		xQueueSend
-		xSemaphoreGive(xMutexLight);
-	}
-}
+//void vGreentLightTimer(xTimerHandle xTimer) {
+//	GPIO_ResetBits(GPIOD, TRAFFIC_GREEN);
+//	GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
+//
+//	if(xSemaphoreTake(xMutexLight, (TickType_t)0) == pdTRUE) {
+//		xQueueSend
+//		xSemaphoreGive(xMutexLight);
+//	}
+//}
 
 /*-----------------------------------------------------------*/
 
@@ -418,8 +412,7 @@ static void prvSetupHardware( void )
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
 
-	GPIO_InitTypeDef Shift1;
-	GPIO_InitTypeDef Traffic_Lights;
+
 
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
@@ -430,9 +423,9 @@ static void prvSetupHardware( void )
 
 	Shift1.GPIO_Mode = GPIO_Mode_OUT;
 	Shift1.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
-//	Shift1.GPIO_OType = GPIO_OType_PP;
+	Shift1.GPIO_OType = GPIO_OType_PP;
 	Shift1.GPIO_PuPd = GPIO_PuPd_DOWN;
-//	Shift1.GPIO_Speed = GPIO_Speed_2MHz;
+	Shift1.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(GPIOB, &Shift1);
 
 	Traffic_Lights.GPIO_Mode = GPIO_Mode_OUT;
