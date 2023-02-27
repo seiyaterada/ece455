@@ -129,11 +129,17 @@ functionality.
 #define TRAFFIC_AMBER GPIO_Pin_1
 #define TRAFFIC_RED GPIO_Pin_2
 
+#define MAX_POT 4
+
 #define NEW_CAR 0x80000000
 #define QUEUE_MASK   0b11111111000000000000000000000000	// Vehicles behind stop line
 #define PAST_MASK    0b00000000111111111110000000000000	// Vehicles past stop line
 //#define LIGHT_MASK   0b00000000000000000001110000000000	// Lights (Green, Yellow, Red)
 #define VEHICLE_MASK (QUEUE_MASK | PAST_MASK)			// All vehicles
+
+#define GREEN_BASE 10000
+#define AMBER_BASE 4000
+#define RED_BASE 2000
 
 
 /*
@@ -147,7 +153,7 @@ SemaphoreHandle_t	xMutexLight;
 
 static void prvSetupHardware( void );
 static void prvDisplayBoard( void *pvParameters );
-static void prvCarTraffic( void *pvParameters );
+static void prvTrafficLight( void *pvParameters );
 static void prvCarTrafficCreator( void *pvParameters );
 static void prvTrafficFlow( void *pvParameters );
 
@@ -253,6 +259,7 @@ int main(void)
 										sizeof( uint16_t ) );		/* The size of each item the queue holds. */
 	vQueueAddToRegistry( xQueue, "MainQueue" );
 	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
+	vQueueAddToRegistry( xTrafficLightQueue, "TrafficLightQueue" );
 	u_int32_t defaultBoardState = (0x80000000);
 	uint16_t defaultFlow = 0;
 	uint16_t defaultLight = TRAFFIC_GREEN;
@@ -261,6 +268,7 @@ int main(void)
 	xQueueSend( xQueue, &defaultBoardState, 0);
 	xQueueSend( xFlowQueue, &defaultFlow, 0);
 	xTaskCreate( prvTrafficFlow, "TrafficFlow", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvTrafficLight, "TrafficLight", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	xTaskCreate( prvCarTrafficCreator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	xTaskCreate( prvDisplayBoard, "DisplayBoardTask", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	vTaskStartScheduler();
@@ -315,10 +323,135 @@ static void prvTrafficFlow(void *pvParameters) {
 	}
 }
 
+static void vChangeLight(xTimerHandle xTimer) {
+	uint16_t light;
+	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+
+	light = changeLight(light);
+
+	xQueueSend(xTrafficLightQueue, &light, 0);
+
+}
+
 static void prvTrafficLight(void *pvParameters) {
 	xTimerHandle xTrafficLightTimer = NULL;
 
-	xTrafficLightTimer = xTimerCreate("LightTimer")
+	u_int16_t  lastFlow;
+	u_int16_t  flow;
+	uint16_t light;
+//	uint32_t boardState;
+	xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
+	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+
+	xTrafficLightTimer = xTimerCreate("TrafficLightTimer", /* A text name, purely to help debugging. */
+													(GREEN_BASE * ((float)1 + (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */
+													pdFALSE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */
+													( void * ) 0,						/* The ID is not used, so can be set to anything. */
+													vChangeLight				/* The callback function that switches the LED off. */
+												);
+
+	xTimerStart( xTrafficLightTimer, 0 );
+
+	lastFlow = flow;
+	xQueueSend(xFlowQueue, &flow, 0);
+	TickType_t xRemainingTime;
+
+	while(1) {
+			// Run every 250ms
+			vTaskDelay(250);
+
+			// Acquire queue values
+//			xQueueReceive( xQueue, &boardState, portMAX_DELAY );
+			xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
+			xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+
+			// Modify timer while active - change period based on change in flow
+		    if( xTimerIsTimerActive( xTrafficLightTimer ) != pdFALSE ){
+				int newTime;
+
+		    	// Get time left on timer
+				xRemainingTime = xTimerGetExpiryTime( xTrafficLightTimer ) - xTaskGetTickCount();
+
+				// Based on light color apply different scaling factor
+				if (light == TRAFFIC_GREEN) {
+
+					// When the traffic flow is shrinking (flow is growing)
+					if (((int)flow - (int)lastFlow) > 100) {
+						// Scale time down (factor of 0.5 to 1)
+						newTime = xRemainingTime * (1 - (float)((int)flow - (int)lastFlow)/(float)(2*MAX_POT));
+
+					// When the traffic flow is growing (flow is shrinking)
+					} else if (((int)flow - (int)lastFlow) < -100) {
+						// Scale time up (factor of 1 to 2)
+						newTime = xRemainingTime * (1 + (float)abs((int)flow - (int)lastFlow)/(float)(MAX_POT));
+
+					// Traffic flow not changing
+					} else {
+						newTime = xRemainingTime;
+					}
+
+				} else if (light == TRAFFIC_AMBER) {
+					newTime = xRemainingTime;
+
+				} else if (light == TRAFFIC_RED) {
+					// When the traffic flow is shrinking (flow is growing)
+					if (((int)flow - (int)lastFlow) > 100) {
+
+						// Scale time up (factor of 1 to 2)
+						newTime = xRemainingTime * (1 + (float)((int)flow - (int)lastFlow)/(float)MAX_POT);
+
+					// When the traffic flow is growing (flow is shrinking)
+					} else if (((int)flow - (int)lastFlow) < -100) {
+
+						// Scale time down (factor of 0.5 to 1)
+						newTime = xRemainingTime * (1 - (float)abs((int)flow - (int)lastFlow)/(float)(2*MAX_POT));
+
+					// Traffic flow not changing
+					} else {
+						newTime = xRemainingTime;
+					}
+				}
+
+				if (newTime <= 0) newTime = 1;
+				xTimerChangePeriod(xTrafficLightTimer, newTime, 0);
+
+			// Reload timer when complete
+		    } else {
+
+		    	// Set period and reload timer based on next light state (apply different scaling factor)
+				if (light == TRAFFIC_GREEN) {
+
+					// Increase light period when flow is low (traffic is higher)
+					// Decrease light period when flow is high (traffic is lower)
+					xTimerChangePeriod(xTrafficLightTimer,
+									   (GREEN_BASE * ((float)1.5 - (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,
+									   0);
+
+				} else if (light == TRAFFIC_AMBER) {
+
+					// Yellow light time period is invariant
+			    	xTimerChangePeriod(xTrafficLightTimer,
+			    					   AMBER_BASE / portTICK_PERIOD_MS,
+									   0);
+
+				} else if (light == TRAFFIC_RED) {
+
+					// Increase light period when flow is high (traffic is lower)
+					// Decrease light period when flow is low (traffic is higher)
+			    	xTimerChangePeriod(xTrafficLightTimer,
+			    					   (RED_BASE * ((float)0.5 + (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,
+									   0);
+				}
+		    }
+
+		    // Once complete, record flow as lastflow
+			lastFlow = flow;
+
+			// Return queue values
+			xQueueSend( xFlowQueue, &flow, 0);
+//			xQueueSend( xQueue, &boardState, 0);
+			xQueueSend(xTrafficLightQueue, &light, 0);
+		}
 }
 
 
@@ -329,9 +462,9 @@ static void prvDisplayBoard(void *pvParameters) {
 		// Run every 10mx
 
 		vTaskDelay(100);
-		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
-		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
-		GPIO_SetBits(GPIOD, TRAFFIC_RED);
+//		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
+//		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
+//		GPIO_SetBits(GPIOD, TRAFFIC_RED);
 //		GPIO_SetBits(GPIOD, )
 
 		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
