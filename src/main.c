@@ -161,13 +161,16 @@ void writeBoard( uint32_t value )
 
 uint16_t get_ADC_Value() {
 	uint16_t adc_value;
+	uint16_t converted_value;
 	ADC_SoftwareStartConv(ADC1);
 	while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
-	adc_value = ADC_GetConversionValue(ADC1)/1024;
+	adc_value = ADC_GetConversionValue(ADC1);
+	converted_value = adc_value / 1000;
 
-	if(adc_value == 4) adc_value = 3;
 
-	return adc_value;
+//	if(adc_value == 4) adc_value = 3;
+
+	return converted_value;
 }
 
 /*-----------------------------------------------------------*/
@@ -180,13 +183,13 @@ int main(void)
 	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
 									sizeof( uint16_t ) );		/* The size of each item the queue holds. */
 	vQueueAddToRegistry( xQueue, "MainQueue" );
-	vQueueAddToRegistry( xFlowQueue, "MainQueue" );
-	u_int32_t defaultBoardState = (0x80000000);
+	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
+	u_int32_t defaultBoardState = (0x10000000);
 	xQueueSend( xQueue, &defaultBoardState, 0);
-	xTaskCreate( prvDisplayBoard, "DisplayBoardTask", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-	xTaskCreate( prvCarTraffic, "CarTraffic", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-//	xTaskCreate( prvCarTrafficCreator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 //	xTaskCreate( prvTrafficFlow, "TrafficFlow", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+//	xTaskCreate( prvCarTrafficCreator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvCarTraffic, "CarTraffic", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvDisplayBoard, "DisplayBoardTask", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	vTaskStartScheduler();
 	return 0;
 }
@@ -205,7 +208,6 @@ static void prvCarTraffic(void *pvParameters) {
 
 static void prvCarTrafficCreator(void *pvParameters) {
 	uint16_t flow = 4;
-	uint16_t car_value = 0;
 	uint32_t boardstate;
 
 	while(1) {
@@ -213,13 +215,12 @@ static void prvCarTrafficCreator(void *pvParameters) {
 		xQueueReceive(xFlowQueue, &flow, portMAX_DELAY);
 		xQueueReceive(xQueue, &boardstate, portMAX_DELAY);
 
+
 		int prob = rand() % 4;
 		//car_value = (rand() % 100) < 100/(4 - flow);
-		if(prob >= flow) {
+		if(prob < flow) {
 			boardstate = 0x00000000 | boardstate | 0x80000000;
-			car_value = 1;
 		} else {
-			car_value = 0;
 		}
 
 		xQueueSend(xFlowQueue, &flow, 0);
@@ -229,17 +230,18 @@ static void prvCarTrafficCreator(void *pvParameters) {
 
 static void prvTrafficFlow(void *pvParameters) {
 	uint16_t flow_value = 0;
-	uint16_t current_flow_value = 0;
+	u_int16_t ulReceivedValue;
 
 	while(1) {
-		vTaskDelay(500);
+		vTaskDelay(250);
+		xQueueReceive( xFlowQueue, &ulReceivedValue, portMAX_DELAY );
 		flow_value = get_ADC_Value();
 
-		if(abs(current_flow_value - flow_value) != 0) {
-			current_flow_value = flow_value;
+//		if(abs(current_flow_value - flow_value) != 0) {
+//			current_flow_value = flow_value;
 
 			xQueueSend(xFlowQueue, &flow_value, portMAX_DELAY);
-		}
+//		}
 
 
 //		xQueueReceive(xFlowQueue, &flow_value, portMAX_DELAY);
@@ -253,10 +255,11 @@ static void prvDisplayBoard(void *pvParameters) {
 
 	while(1) {
 		// Run every 10mx
+
 		vTaskDelay(10);
-		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
-		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
-		GPIO_SetBits(GPIOD, TRAFFIC_RED);
+//		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
+//		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
+//		GPIO_SetBits(GPIOD, TRAFFIC_RED);
 //		GPIO_SetBits(GPIOD, )
 
 		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
@@ -357,7 +360,7 @@ static void prvSetupHardware( void )
 	GPIO_initStructre.GPIO_Pin = GPIO_Pin_1; // Provide input to channel 10 of ADC i.e GPIO Pin 0 of Port C
 	GPIO_initStructre.GPIO_Mode = GPIO_Mode_AN; //GPIO Pin as analog Mode
 	GPIO_initStructre.GPIO_PuPd = GPIO_PuPd_NOPULL;
-	GPIO_Init(GPIOC,&GPIO_initStructre);// GPIO Initialization
+	GPIO_Init(GPIOA,&GPIO_initStructre);// GPIO Initialization
 
 	ADC_DeInit();
 	ADC_InitTypeDef adc;
