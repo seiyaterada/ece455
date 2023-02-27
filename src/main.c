@@ -130,6 +130,11 @@ functionality.
 #define TRAFFIC_RED GPIO_Pin_2
 
 #define NEW_CAR 0x80000000
+#define QUEUE_MASK   0b11111111000000000000000000000000	// Vehicles behind stop line
+#define PAST_MASK    0b00000000111111111110000000000000	// Vehicles past stop line
+//#define LIGHT_MASK   0b00000000000000000001110000000000	// Lights (Green, Yellow, Red)
+#define VEHICLE_MASK (QUEUE_MASK | PAST_MASK)			// All vehicles
+
 
 /*
  * TODO: Implement this function for any hardware specific clock configuration
@@ -137,6 +142,9 @@ functionality.
  */
 static xQueueHandle xQueue = NULL;
 static xQueueHandle xFlowQueue = NULL;
+static xQueueHandle xTrafficLightQueue = NULL;
+SemaphoreHandle_t	xMutexLight;
+
 static void prvSetupHardware( void );
 static void prvDisplayBoard( void *pvParameters );
 static void prvCarTraffic( void *pvParameters );
@@ -167,10 +175,64 @@ uint16_t get_ADC_Value() {
 	adc_value = ADC_GetConversionValue(ADC1);
 	converted_value = adc_value / 1000;
 
-
-//	if(adc_value == 4) adc_value = 3;
-
 	return converted_value;
+}
+
+uint16_t changeLight(uint16_t light) {
+	uint16_t nextLight;
+
+	if(light == TRAFFIC_GREEN) {
+		nextLight = TRAFFIC_AMBER;
+	} else if(light == TRAFFIC_AMBER) {
+		nextLight = TRAFFIC_RED;
+	} else if(light == TRAFFIC_RED) {
+		nextLight = TRAFFIC_GREEN;
+	}
+
+	return nextLight;
+}
+
+uint32_t advanceCars(int newCar, uint32_t boardState) {
+	if(newCar == 1) {
+		return 0x00000000 | (VEHICLE_MASK & (boardState >> 1)) | NEW_CAR;
+	}
+
+	return 0x00000000 | (VEHICLE_MASK & (boardState >> 1));
+}
+
+uint32_t stopAdvanceCars(int newCar, uint32_t boardState) {
+		// Find rightmost 0 in vehicles before light
+		// Set all leftwards bits to 1s
+		uint32_t stopLoc = (boardState | ~QUEUE_MASK);
+
+		// Finds lest significant zero
+		stopLoc = ~stopLoc & (stopLoc+1);
+
+		// Get value of position
+		stopLoc = (int)log2(stopLoc) & 0xFF;
+		if (stopLoc == 0) {
+			stopLoc = 32;
+		}
+
+		// Create mask for just those vehicles before the light with room to move ahead
+		uint32_t dynMask = 0x00000000;
+		for (int i=0; i < 32-stopLoc; i++) {
+			dynMask = ((dynMask >> 1) | 0x80000000);
+		}
+
+		if(newCar == 1) {
+			return 0x00000000
+							| ((dynMask & boardState) >> 1) 				// Shifts unblocked vehicles
+							| (~dynMask & QUEUE_MASK & boardState)			// Places blocked vehicles
+							| (PAST_MASK & ((PAST_MASK & boardState) >> 1)) // Shifts vehicles that are past the stop line
+							| NEW_CAR;										// Places new vehicle
+		}
+
+		// Build new boardState
+		return 0x00000000
+				| ((dynMask & boardState) >> 1) 				// Shifts unblocked vehicles
+				| (~dynMask & QUEUE_MASK & boardState)			// Places blocked vehicles
+				| (PAST_MASK & ((PAST_MASK & boardState) >> 1)); // Shifts vehicles that are past the stop line
 }
 
 /*-----------------------------------------------------------*/
@@ -178,53 +240,70 @@ uint16_t get_ADC_Value() {
 int main(void)
 {
 	prvSetupHardware();
+	xMutexLight = xSemaphoreCreateMutex();
+	    if( xMutexLight == NULL )
+	    {
+	        printf("ERROR: LIGHT SEMAPHORE NOT CREATED. \n"); 	/* There was insufficient FreeRTOS heap available for the semaphore to be created successfully. */
+	    }
+	    else
+	    {
+	    	xSemaphoreGive( xMutexLight ); // need to give semaphore after it is defined
+	    }
 	xQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
 								sizeof( uint32_t ) );		/* The size of each item the queue holds. */
 	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
 									sizeof( uint16_t ) );		/* The size of each item the queue holds. */
+	xTrafficLightQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
+										sizeof( uint16_t ) );		/* The size of each item the queue holds. */
 	vQueueAddToRegistry( xQueue, "MainQueue" );
 	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
-	u_int32_t defaultBoardState = (0x10000000);
+	u_int32_t defaultBoardState = (0xC0000000);
+	uint16_t defaultFlow = 0;
+	uint16_t defaultLight = TRAFFIC_RED;
+
+	xQueueSend( xTrafficLightQueue, &defaultLight, 0);
 	xQueueSend( xQueue, &defaultBoardState, 0);
-//	xTaskCreate( prvTrafficFlow, "TrafficFlow", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-//	xTaskCreate( prvCarTrafficCreator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-	xTaskCreate( prvCarTraffic, "CarTraffic", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xQueueSend( xFlowQueue, &defaultFlow, 0);
+	xTaskCreate( prvTrafficFlow, "TrafficFlow", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvCarTrafficCreator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	xTaskCreate( prvDisplayBoard, "DisplayBoardTask", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	vTaskStartScheduler();
 	return 0;
 }
 
-static void prvCarTraffic(void *pvParameters) {
-	uint32_t boardstate;
-
-	while(1) {
-		vTaskDelay(500);
-		xQueueReceive(xQueue, &boardstate, portMAX_DELAY);
-
-		boardstate = 0x00000000 | (boardstate >> 1);
-		xQueueSend( xQueue, &boardstate, 0);
-	}
-}
-
 static void prvCarTrafficCreator(void *pvParameters) {
 	uint16_t flow = 4;
 	uint32_t boardstate;
+	uint16_t light;
+	int newCar = 0;
 
 	while(1) {
 		vTaskDelay(500);
 		xQueueReceive(xFlowQueue, &flow, portMAX_DELAY);
 		xQueueReceive(xQueue, &boardstate, portMAX_DELAY);
+		xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
 
 
 		int prob = rand() % 4;
 		//car_value = (rand() % 100) < 100/(4 - flow);
-		if(prob < flow) {
-			boardstate = 0x00000000 | boardstate | 0x80000000;
+//		if(prob < flow) {
+//			boardstate = advanceCars(1, boardstate);
+//		} else {
+//			boardstate = advanceCars(0, boardstate);
+//		}
+
+		if(light == TRAFFIC_GREEN) {
+			boardstate = advanceCars(newCar, boardstate);
 		} else {
+			boardstate = stopAdvanceCars(newCar, boardstate);
 		}
+
+
+//		boardstate = advanceCars(0, boardstate);
 
 		xQueueSend(xFlowQueue, &flow, 0);
 		xQueueSend(xQueue, &boardstate, 0);
+		xQueueSend(xTrafficLightQueue, &light, 0);
 	}
 }
 
@@ -236,17 +315,16 @@ static void prvTrafficFlow(void *pvParameters) {
 		vTaskDelay(250);
 		xQueueReceive( xFlowQueue, &ulReceivedValue, portMAX_DELAY );
 		flow_value = get_ADC_Value();
-
-//		if(abs(current_flow_value - flow_value) != 0) {
-//			current_flow_value = flow_value;
-
-			xQueueSend(xFlowQueue, &flow_value, portMAX_DELAY);
-//		}
-
-
-//		xQueueReceive(xFlowQueue, &flow_value, portMAX_DELAY);
-
+		xQueueSend(xFlowQueue, &flow_value, 0);
 	}
+}
+
+static void
+
+static void prvTrafficLight(void *pvParameters) {
+	xTimerHandle xTrafficLightTimer = NULL;
+
+	xTrafficLightTimer = xTimerCreate("LightTimer")
 }
 
 
@@ -256,7 +334,7 @@ static void prvDisplayBoard(void *pvParameters) {
 	while(1) {
 		// Run every 10mx
 
-		vTaskDelay(10);
+		vTaskDelay(100);
 //		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
 //		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
 //		GPIO_SetBits(GPIOD, TRAFFIC_RED);
@@ -268,6 +346,16 @@ static void prvDisplayBoard(void *pvParameters) {
 		writeBoard(ulReceivedValue);
 
 		xQueueSend( xQueue, &ulReceivedValue, 0);
+	}
+}
+
+void vGreentLightTimer(xTimerHandle xTimer) {
+	GPIO_ResetBits(GPIOD, TRAFFIC_GREEN);
+	GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
+	
+	if(xSemaphoreTake(xMutexLight, (TickType_t)0) == pdTRUE) {
+		xQueueSend
+		xSemaphoreGive(xMutexLight);
 	}
 }
 
