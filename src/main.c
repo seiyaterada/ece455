@@ -121,51 +121,38 @@ functionality.
 #include "../FreeRTOS_Source/include/task.h"
 #include "../FreeRTOS_Source/include/timers.h"
 
-
-
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 100
 #define TRAFFIC_GREEN GPIO_Pin_0
 #define TRAFFIC_AMBER GPIO_Pin_1
 #define TRAFFIC_RED GPIO_Pin_2
 
-#define MAX_POT 4
+#define MAX_POT 3
 
 #define NEW_CAR 0x80000000
 #define QUEUE_MASK   0b11111111000000000000000000000000	// Vehicles behind stop line
 #define PAST_MASK    0b00000000111111111110000000000000	// Vehicles past stop line
-//#define LIGHT_MASK   0b00000000000000000001110000000000	// Lights (Green, Yellow, Red)
 #define VEHICLE_MASK (QUEUE_MASK | PAST_MASK)			// All vehicles
 
-#define GREEN_BASE 10000
-#define AMBER_BASE 3000
-#define RED_BASE 5000
+#define GREEN_BASE_SPEED 5000
+#define AMBER_BASE_SPEED 3000
+#define RED_BASE_SPEED 5000
 
 
-/*
- * TODO: Implement this function for any hardware specific clock configuration
- * that was not already performed before main() was called.
- */
 static xQueueHandle xQueue = NULL;
 static xQueueHandle xFlowQueue = NULL;
 static xQueueHandle xTrafficLightQueue = NULL;
-SemaphoreHandle_t	xMutexLight;
 
 static void prvSetupHardware( void );
 static void prvDisplayBoard( void *pvParameters );
 static void prvTrafficLight( void *pvParameters );
-static void prvCarTrafficCreator( void *pvParameters );
+static void prvTrafficGenerator( void *pvParameters );
 static void prvTrafficFlow( void *pvParameters );
 
-uint16_t light00;
+uint16_t traffic_light;
 
 GPIO_InitTypeDef Shift1;
 GPIO_InitTypeDef Traffic_Lights;
-
-/*
- * The queue send and receive tasks as described in the comments at the top of
- * this file.
- */
 
 xQueueHandle xQueue_handle = 0;
 
@@ -174,7 +161,6 @@ void writeBoard( uint32_t value )
 	for(int i = 0; i<32;i++){
 			uint32_t nextBit = 0x1 & (value >> i);
 			GPIO_Write(GPIOB, nextBit);
-//			GPIO_ToggleBits(GPIOB, GPIO_Pin_1);
 			GPIO_ResetBits(GPIOB, GPIO_Pin_1);
 			GPIO_SetBits(GPIOB, GPIO_Pin_1);
 		}
@@ -184,9 +170,10 @@ uint16_t get_ADC_Value() {
 	uint16_t adc_value;
 	uint16_t converted_value;
 	ADC_SoftwareStartConv(ADC1);
+
 	while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
 	adc_value = ADC_GetConversionValue(ADC1);
-	converted_value = adc_value / 1000;
+	converted_value = adc_value / 1024;
 
 	return converted_value;
 }
@@ -204,46 +191,61 @@ static void changeLight(uint16_t light) {
 	}
 }
 
+static void vChangeLight(xTimerHandle xTimer) {
+	xQueueReceive(xTrafficLightQueue, &traffic_light, portMAX_DELAY);
+
+	if(traffic_light == TRAFFIC_GREEN) {
+			traffic_light = TRAFFIC_AMBER;
+		} else if(traffic_light == TRAFFIC_AMBER) {
+			traffic_light = TRAFFIC_RED;
+		} else if(traffic_light == TRAFFIC_RED) {
+			traffic_light = TRAFFIC_GREEN;
+		}
+
+	xQueueSend(xTrafficLightQueue, &traffic_light, 0);
+}
+
+// when light red let cars through traffic lights
 uint32_t advanceCars(int newCar, uint32_t boardState) {
 	if(newCar == 1) {
 		return 0x00000000 | (VEHICLE_MASK & (boardState >> 1)) | NEW_CAR;
 	}
-
 	return 0x00000000 | (VEHICLE_MASK & (boardState >> 1));
 }
 
+// when light red or amber stop traffic before lights
 uint32_t stopAdvanceCars(int newCar, uint32_t boardState) {
-		// Find rightmost 0 in vehicles before light
-		// Set all leftwards bits to 1s
-		uint32_t stopLoc = (boardState | ~QUEUE_MASK);
+		// Find the rightmost 0 in vehicles before light
+		// Set all leftwards bits to 1's
+		uint32_t stopVeh = (boardState | ~QUEUE_MASK);
 
-		// Finds lest significant zero
-		stopLoc = ~stopLoc & (stopLoc+1);
+		// Finds the least significant zero
+		stopVeh = ~stopVeh & (stopVeh+1);
 
 		// Get value of position
-		stopLoc = (int)log2(stopLoc) & 0xFF;
-		if (stopLoc == 0) {
-			stopLoc = 32;
+		stopVeh = (int)log2(stopVeh) & 0xFF;
+		if (stopVeh == 0) {
+			stopVeh = 32;
 		}
 
-		// Create mask for just those vehicles before the light with room to move ahead
-		uint32_t dynMask = 0x00000000;
-		for (int i=0; i < 32-stopLoc; i++) {
-			dynMask = ((dynMask >> 1) | 0x80000000);
+		// Create mask for only the vehicles before the light that have room to move ahead
+		uint32_t prelightVehMask = 0x00000000;
+		for (int i=0; i < 32-stopVeh; i++) {
+			prelightVehMask = ((prelightVehMask >> 1) | 0x80000000);
 		}
 
 		if(newCar == 1) {
 			return 0x00000000
-							| ((dynMask & boardState) >> 1) 				// Shifts unblocked vehicles
-							| (~dynMask & QUEUE_MASK & boardState)			// Places blocked vehicles
+							| ((prelightVehMask & boardState) >> 1) 				// Shifts unblocked vehicles
+							| (~prelightVehMask & QUEUE_MASK & boardState)			// Places blocked vehicles
 							| (PAST_MASK & ((PAST_MASK & boardState) >> 1)) // Shifts vehicles that are past the stop line
 							| NEW_CAR;										// Places new vehicle
 		}
 
 		// Build new boardState
 		return 0x00000000
-				| ((dynMask & boardState) >> 1) 				// Shifts unblocked vehicles
-				| (~dynMask & QUEUE_MASK & boardState)			// Places blocked vehicles
+				| ((prelightVehMask & boardState) >> 1) 				// Shifts unblocked vehicles
+				| (~prelightVehMask & QUEUE_MASK & boardState)			// Places blocked vehicles
 				| (PAST_MASK & ((PAST_MASK & boardState) >> 1)); // Shifts vehicles that are past the stop line
 }
 
@@ -252,224 +254,42 @@ uint32_t stopAdvanceCars(int newCar, uint32_t boardState) {
 int main(void)
 {
 	prvSetupHardware();
-	xQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
-								sizeof( uint32_t ) );		/* The size of each item the queue holds. */
-	xFlowQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
-									sizeof( uint16_t ) );		/* The size of each item the queue holds. */
-	xTrafficLightQueue = xQueueCreate( 	mainQUEUE_LENGTH,			/* The number of items the queue can hold. */
-										sizeof( uint16_t ) );		/* The size of each item the queue holds. */
-	vQueueAddToRegistry( xQueue, "MainQueue" );
-	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
-	vQueueAddToRegistry( xTrafficLightQueue, "TrafficLightQueue" );
+	// Create queues
+	xQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof( uint32_t ));
+	xFlowQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof( uint16_t ) );
+	xTrafficLightQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof( uint16_t ));
+
+	// Add queues to registry
+	vQueueAddToRegistry(xQueue, "MainQueue");
+	vQueueAddToRegistry(xFlowQueue, "FlowQueue");
+	vQueueAddToRegistry(xTrafficLightQueue, "TrafficLightQueue");
+
+	// Initial states
 	u_int32_t defaultBoardState = (0x00000000);
 	uint16_t defaultFlow = 0;
 	uint16_t defaultLight = TRAFFIC_GREEN;
 
+	// Send queue inital values
 	xQueueSend( xTrafficLightQueue, &defaultLight, 0);
 	xQueueSend( xQueue, &defaultBoardState, 0);
 	xQueueSend( xFlowQueue, &defaultFlow, 0);
-	xTaskCreate( prvTrafficFlow, "TrafficFlow", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-	xTaskCreate( prvTrafficLight, "TrafficLight", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-	xTaskCreate( prvCarTrafficCreator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+
+	// Create tasks
 	xTaskCreate( prvDisplayBoard, "DisplayBoardTask", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvTrafficFlow, "TrafficFlow", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvTrafficGenerator, "CarTrafficCreator", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate( prvTrafficLight, "TrafficLight", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 	vTaskStartScheduler();
 	return 0;
 }
-
-static void prvCarTrafficCreator(void *pvParameters) {
-	uint16_t flow = 4;
-	uint32_t boardstate;
-	uint16_t light;
-	int newCar = 0;
-
-	while(1) {
-		vTaskDelay(500);
-		xQueueReceive(xFlowQueue, &flow, portMAX_DELAY);
-		xQueueReceive(xQueue, &boardstate, portMAX_DELAY);
-		xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
-
-
-		int prob = rand() % 4;
-		if(prob < flow) {
-			newCar = 1;
-		} else {
-			newCar = 0;
-		}
-
-		if(light == TRAFFIC_GREEN) {
-			boardstate = advanceCars(newCar, boardstate);
-		} else {
-			boardstate = stopAdvanceCars(newCar, boardstate);
-		}
-
-		xQueueSend(xFlowQueue, &flow, 0);
-		xQueueSend(xQueue, &boardstate, 0);
-		xQueueSend(xTrafficLightQueue, &light, 0);
-	}
-}
-
-static void prvTrafficFlow(void *pvParameters) {
-	uint16_t flow_value = 0;
-	u_int16_t ulReceivedValue;
-
-	while(1) {
-		vTaskDelay(250);
-		xQueueReceive( xFlowQueue, &ulReceivedValue, portMAX_DELAY );
-		flow_value = get_ADC_Value();
-		xQueueSend(xFlowQueue, &flow_value, 0);
-	}
-}
-
-static void vChangeLight(xTimerHandle xTimer) {
-	xQueueReceive(xTrafficLightQueue, &light00, portMAX_DELAY);
-
-	if(light00 == TRAFFIC_GREEN) {
-			light00 = TRAFFIC_AMBER;
-		} else if(light00 == TRAFFIC_AMBER) {
-			light00 = TRAFFIC_RED;
-		} else if(light00 == TRAFFIC_RED) {
-			light00 = TRAFFIC_GREEN;
-		}
-
-	xQueueSend(xTrafficLightQueue, &light00, 0);
-
-}
-
-static void prvTrafficLight(void *pvParameters) {
-	xTimerHandle xTrafficLightTimer = NULL;
-
-	u_int16_t  lastFlow;
-	u_int16_t  flow;
-	uint16_t light;
-//	uint32_t boardState;
-	xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
-	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
-
-	xTrafficLightTimer = xTimerCreate("TrafficLightTimer",
-													(GREEN_BASE * ((float)2 - (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */
-													pdFALSE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */
-													( void * ) 0,						/* The ID is not used, so can be set to anything. */
-													vChangeLight				/* The callback function that switches the LED off. */
-												);
-
-	xTimerStart( xTrafficLightTimer, 0 );
-
-	lastFlow = flow;
-	xQueueSend(xFlowQueue, &flow, 0);
-	xQueueSend(xTrafficLightQueue, &light, 0);
-	TickType_t xRemainingTime;
-
-	while(1) {
-			// Run every 250ms
-			vTaskDelay(250);
-
-			// Acquire queue values
-//			xQueueReceive( xQueue, &boardState, portMAX_DELAY );
-			xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
-			xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
-
-			// Modify timer while active - change period based on change in flow
-		    if( xTimerIsTimerActive( xTrafficLightTimer ) != pdFALSE ){
-				int newTime;
-
-		    	// Get time left on timer
-				xRemainingTime = xTimerGetExpiryTime( xTrafficLightTimer ) - xTaskGetTickCount();
-
-				// Based on light color apply different scaling factor
-				if (light == TRAFFIC_GREEN) {
-
-					// When the traffic flow is shrinking (flow is growing)
-					if (((int)flow > (int)lastFlow)) {
-						// Scale time down (factor of 0.5 to 1)
-						newTime = xRemainingTime * (1 - (float)((int)flow - (int)lastFlow)/(float)(2*MAX_POT));
-
-					// When the traffic flow is growing (flow is shrinking)
-					} else if (((int)flow < (int)lastFlow)) {
-						// Scale time up (factor of 1 to 2)
-						newTime = xRemainingTime * (1 + (float)abs((int)flow - (int)lastFlow)/(float)(MAX_POT));
-
-					// Traffic flow not changing
-					} else {
-						newTime = xRemainingTime;
-					}
-
-				} else if (light == TRAFFIC_AMBER) {
-					newTime = xRemainingTime;
-
-				} else if (light == TRAFFIC_RED) {
-					// When the traffic flow is shrinking (flow is growing)
-					if (((int)flow > (int)lastFlow)) {
-
-						// Scale time up (factor of 1 to 2)
-						newTime = xRemainingTime * (1 + (float)((int)flow - (int)lastFlow)/(float)MAX_POT);
-
-					// When the traffic flow is growing (flow is shrinking)
-					} else if (((int)flow < (int)lastFlow)) {
-
-						// Scale time down (factor of 0.5 to 1)
-						newTime = xRemainingTime * (1 - (float)abs((int)flow - (int)lastFlow)/(float)(2*MAX_POT));
-
-					// Traffic flow not changing
-					} else {
-						newTime = xRemainingTime;
-					}
-				}
-
-				if (newTime <= 0) newTime = 1;
-				xTimerChangePeriod(xTrafficLightTimer, newTime, 0);
-
-			// Reload timer when complete
-		    } else {
-
-		    	// Set period and reload timer based on next light state (apply different scaling factor)
-				if (light == TRAFFIC_GREEN) {
-
-					// Increase light period when flow is low (traffic is higher)
-					// Decrease light period when flow is high (traffic is lower)
-					xTimerChangePeriod(xTrafficLightTimer,
-									   (GREEN_BASE * ((float)2.0 - (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,
-									   0);
-
-				} else if (light == TRAFFIC_AMBER) {
-
-					// Yellow light time period is invariant
-			    	xTimerChangePeriod(xTrafficLightTimer,
-			    					   AMBER_BASE / portTICK_PERIOD_MS,
-									   0);
-
-				} else if (light == TRAFFIC_RED) {
-
-					// Increase light period when flow is high (traffic is lower)
-					// Decrease light period when flow is low (traffic is higher)
-			    	xTimerChangePeriod(xTrafficLightTimer,
-			    					   (RED_BASE * ((float)0.5 + (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,
-									   0);
-				}
-		    }
-
-		    // Once complete, record flow as lastflow
-			lastFlow = flow;
-
-			// Return queue values
-			xQueueSend( xFlowQueue, &flow, 0);
-//			xQueueSend( xQueue, &boardState, 0);
-			xQueueSend(xTrafficLightQueue, &light, 0);
-		}
-}
-
 
 static void prvDisplayBoard(void *pvParameters) {
 	uint32_t ulReceivedValue;
 	uint16_t light;
 
 	while(1) {
-		// Run every 10mx
-
+		// Run every 10ms
 		vTaskDelay(100);
-//		GPIO_SetBits(GPIOD, TRAFFIC_GREEN);
-//		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
-//		GPIO_SetBits(GPIOD, TRAFFIC_RED);
-//		GPIO_SetBits(GPIOD, )
 		xQueueReceive( xTrafficLightQueue, &light, portMAX_DELAY );
 		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
 
@@ -482,18 +302,154 @@ static void prvDisplayBoard(void *pvParameters) {
 	}
 }
 
-//void vGreentLightTimer(xTimerHandle xTimer) {
-//	GPIO_ResetBits(GPIOD, TRAFFIC_GREEN);
-//	GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
-//
-//	if(xSemaphoreTake(xMutexLight, (TickType_t)0) == pdTRUE) {
-//		xQueueSend
-//		xSemaphoreGive(xMutexLight);
-//	}
-//}
+static void prvTrafficFlow(void *pvParameters) {
+	uint16_t flow_value = 0;
+	u_int16_t ulReceivedValue;
 
-/*-----------------------------------------------------------*/
+	while(1) {
+		// Run every 250ms
+		vTaskDelay(250);
+		xQueueReceive( xFlowQueue, &ulReceivedValue, portMAX_DELAY );
+		flow_value = get_ADC_Value();
+		xQueueSend(xFlowQueue, &flow_value, 0);
+	}
+}
 
+static void prvTrafficGenerator(void *pvParameters) {
+	uint16_t flow = 4;
+	uint32_t boardstate;
+	uint16_t light;
+	int newCar = 0;
+
+	while(1) {
+		vTaskDelay(500);
+		xQueueReceive(xFlowQueue, &flow, portMAX_DELAY);
+		xQueueReceive(xQueue, &boardstate, portMAX_DELAY);
+		xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+
+		// Get random probability for car generation
+		int prob = rand() % 4;
+		if(prob < flow) {
+			newCar = 1;
+		} else {
+			newCar = 0;
+		}
+
+		// Pass cars through light if green
+		if(light == TRAFFIC_GREEN) {
+			boardstate = advanceCars(newCar, boardstate);
+		// Stop cars at light if amber or red
+		} else {
+			boardstate = stopAdvanceCars(newCar, boardstate);
+		}
+
+		xQueueSend(xFlowQueue, &flow, 0);
+		xQueueSend(xQueue, &boardstate, 0);
+		xQueueSend(xTrafficLightQueue, &light, 0);
+	}
+}
+
+static void prvTrafficLight(void *pvParameters) {
+	xTimerHandle xTrafficLightTimer = NULL;
+
+	u_int16_t  prevFlow;
+	u_int16_t  flow;
+	uint16_t light;
+
+	xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
+	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+
+	xTrafficLightTimer = xTimerCreate("TrafficLightTimer", (GREEN_BASE_SPEED * ((float)1 + (float)flow/(float)MAX_POT) / portTICK_PERIOD_MS), pdFALSE, ( void * ) 0, vChangeLight);
+
+	xTimerStart( xTrafficLightTimer, 0 );
+
+	prevFlow = flow;
+	xQueueSend(xFlowQueue, &flow, 0);
+	xQueueSend(xTrafficLightQueue, &light, 0);
+	TickType_t xRemainingTime;
+
+	while(1) {
+			// Run every 250ms
+			vTaskDelay(250);
+
+			// Get queue values
+			xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
+			xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+
+			// Modify timer while active - change period based on change in flow
+		    if( xTimerIsTimerActive( xTrafficLightTimer ) != pdFALSE ){
+				int updatedTime;
+
+		    	// Get time left on timer
+				xRemainingTime = xTimerGetExpiryTime( xTrafficLightTimer ) - xTaskGetTickCount();
+
+				// Apply scale factor based on light color
+				if (light == TRAFFIC_GREEN) {
+
+					// Flow growing/traffic flow shrinking
+					if (((int)flow > (int)prevFlow)) {
+						// Scale time factor down (factor of 0.5 to 1)
+						updatedTime = xRemainingTime * (1 - (float)((int)flow - (int)prevFlow)/(float)(2*MAX_POT));
+
+					// Flow shrinking/traffic flow growing
+					} else if (((int)flow < (int)prevFlow)) {
+						// Scale time factor up (factor of 1 to 2)
+						updatedTime = xRemainingTime * (1 + (float)abs((int)flow - (int)prevFlow)/(float)(MAX_POT));
+
+					// Traffic time no change
+					} else {
+						updatedTime = xRemainingTime;
+					}
+
+				} else if (light == TRAFFIC_AMBER) {
+					updatedTime = xRemainingTime;
+
+				} else if (light == TRAFFIC_RED) {
+					// Flow growing/traffic flow shrinking
+					if (((int)flow > (int)prevFlow)) {
+
+						// Scale time factor up (factor of 1 to 2)
+						updatedTime = xRemainingTime * (1 + (float)((int)flow - (int)prevFlow)/(float)MAX_POT);
+
+					// Flow shrinking/traffic flow growing
+					} else if (((int)flow < (int)prevFlow)) {
+
+						// Scale time factor down (factor of 0.5 to 1)
+						updatedTime = xRemainingTime * (1 - (float)abs((int)flow - (int)prevFlow)/(float)(2*MAX_POT));
+
+					// Traffic flow not changing
+					} else {
+						updatedTime = xRemainingTime;
+					}
+				}
+
+				if (updatedTime <= 0) updatedTime = 1;
+				xTimerChangePeriod(xTrafficLightTimer, updatedTime, 0);
+
+			// Reload timer when complete
+		    } else {
+		    	// Set period and reload timer based on next light state
+				if (light == TRAFFIC_GREEN) {
+					xTimerChangePeriod(xTrafficLightTimer, (GREEN_BASE_SPEED * ((float)1.0 + (float)flow/(float)MAX_POT) / portTICK_PERIOD_MS), 0);
+
+				} else if (light == TRAFFIC_AMBER) {
+
+					// Yellow light time period doesn't change
+			    	xTimerChangePeriod(xTrafficLightTimer, AMBER_BASE_SPEED / portTICK_PERIOD_MS, 0);
+
+				} else if (light == TRAFFIC_RED) {
+			    	xTimerChangePeriod(xTrafficLightTimer, (RED_BASE_SPEED * ((float)2.0 - (float)flow/(float)MAX_POT) / portTICK_PERIOD_MS), 0);
+				}
+		    }
+
+		    // Once complete, record flow as prevFlow
+			prevFlow = flow;
+
+			// Return queue values
+			xQueueSend( xFlowQueue, &flow, 0);
+			xQueueSend(xTrafficLightQueue, &light, 0);
+		}
+}
 
 /*-----------------------------------------------------------*/
 
@@ -551,14 +507,11 @@ static void prvSetupHardware( void )
 	http://www.freertos.org/RTOS-Cortex-M3-M4.html */
 	NVIC_SetPriorityGrouping( 0 );
 
-
-
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOD, ENABLE);
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOE, ENABLE);
-
 
 	Shift1.GPIO_Mode = GPIO_Mode_OUT;
 	Shift1.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
@@ -577,7 +530,7 @@ static void prvSetupHardware( void )
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA,ENABLE);//Enable GPIO pin to read analog input
 
 	GPIO_InitTypeDef GPIO_initStructre;
-	GPIO_initStructre.GPIO_Pin = GPIO_Pin_1; // Provide input to channel 10 of ADC i.e GPIO Pin 0 of Port C
+	GPIO_initStructre.GPIO_Pin = GPIO_Pin_1; // Provide input to channel 1
 	GPIO_initStructre.GPIO_Mode = GPIO_Mode_AN; //GPIO Pin as analog Mode
 	GPIO_initStructre.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIO_Init(GPIOA,&GPIO_initStructre);// GPIO Initialization
