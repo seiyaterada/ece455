@@ -137,9 +137,9 @@ functionality.
 //#define LIGHT_MASK   0b00000000000000000001110000000000	// Lights (Green, Yellow, Red)
 #define VEHICLE_MASK (QUEUE_MASK | PAST_MASK)			// All vehicles
 
-#define GREEN_BASE 5000
+#define GREEN_BASE 10000
 #define AMBER_BASE 3000
-#define RED_BASE 10000
+#define RED_BASE 5000
 
 
 /*
@@ -261,7 +261,7 @@ int main(void)
 	vQueueAddToRegistry( xQueue, "MainQueue" );
 	vQueueAddToRegistry( xFlowQueue, "FlowQueue" );
 	vQueueAddToRegistry( xTrafficLightQueue, "TrafficLightQueue" );
-	u_int32_t defaultBoardState = (0x80000000);
+	u_int32_t defaultBoardState = (0x00000000);
 	uint16_t defaultFlow = 0;
 	uint16_t defaultLight = TRAFFIC_GREEN;
 
@@ -290,7 +290,6 @@ static void prvCarTrafficCreator(void *pvParameters) {
 
 
 		int prob = rand() % 4;
-		//car_value = (rand() % 100) < 100/(4 - flow);
 		if(prob < flow) {
 			newCar = 1;
 		} else {
@@ -302,9 +301,6 @@ static void prvCarTrafficCreator(void *pvParameters) {
 		} else {
 			boardstate = stopAdvanceCars(newCar, boardstate);
 		}
-
-
-//		boardstate = advanceCars(0, boardstate);
 
 		xQueueSend(xFlowQueue, &flow, 0);
 		xQueueSend(xQueue, &boardstate, 0);
@@ -350,7 +346,7 @@ static void prvTrafficLight(void *pvParameters) {
 	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
 
 	xTrafficLightTimer = xTimerCreate("TrafficLightTimer",
-													(GREEN_BASE * ((float)1 + (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */
+													(GREEN_BASE * ((float)2 - (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */
 													pdFALSE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */
 													( void * ) 0,						/* The ID is not used, so can be set to anything. */
 													vChangeLight				/* The callback function that switches the LED off. */
@@ -383,12 +379,12 @@ static void prvTrafficLight(void *pvParameters) {
 				if (light == TRAFFIC_GREEN) {
 
 					// When the traffic flow is shrinking (flow is growing)
-					if (((int)flow - (int)lastFlow) > 100) {
+					if (((int)flow > (int)lastFlow)) {
 						// Scale time down (factor of 0.5 to 1)
 						newTime = xRemainingTime * (1 - (float)((int)flow - (int)lastFlow)/(float)(2*MAX_POT));
 
 					// When the traffic flow is growing (flow is shrinking)
-					} else if (((int)flow - (int)lastFlow) < -100) {
+					} else if (((int)flow < (int)lastFlow)) {
 						// Scale time up (factor of 1 to 2)
 						newTime = xRemainingTime * (1 + (float)abs((int)flow - (int)lastFlow)/(float)(MAX_POT));
 
@@ -402,13 +398,13 @@ static void prvTrafficLight(void *pvParameters) {
 
 				} else if (light == TRAFFIC_RED) {
 					// When the traffic flow is shrinking (flow is growing)
-					if (((int)flow - (int)lastFlow) > 100) {
+					if (((int)flow > (int)lastFlow)) {
 
 						// Scale time up (factor of 1 to 2)
 						newTime = xRemainingTime * (1 + (float)((int)flow - (int)lastFlow)/(float)MAX_POT);
 
 					// When the traffic flow is growing (flow is shrinking)
-					} else if (((int)flow - (int)lastFlow) < -100) {
+					} else if (((int)flow < (int)lastFlow)) {
 
 						// Scale time down (factor of 0.5 to 1)
 						newTime = xRemainingTime * (1 - (float)abs((int)flow - (int)lastFlow)/(float)(2*MAX_POT));
@@ -431,7 +427,7 @@ static void prvTrafficLight(void *pvParameters) {
 					// Increase light period when flow is low (traffic is higher)
 					// Decrease light period when flow is high (traffic is lower)
 					xTimerChangePeriod(xTrafficLightTimer,
-									   (GREEN_BASE * ((float)1.5 - (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,
+									   (GREEN_BASE * ((float)2.0 - (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,
 									   0);
 
 				} else if (light == TRAFFIC_AMBER) {
