@@ -137,9 +137,9 @@ functionality.
 //#define LIGHT_MASK   0b00000000000000000001110000000000	// Lights (Green, Yellow, Red)
 #define VEHICLE_MASK (QUEUE_MASK | PAST_MASK)			// All vehicles
 
-#define GREEN_BASE 10000
-#define AMBER_BASE 4000
-#define RED_BASE 2000
+#define GREEN_BASE 5000
+#define AMBER_BASE 3000
+#define RED_BASE 10000
 
 
 /*
@@ -156,6 +156,8 @@ static void prvDisplayBoard( void *pvParameters );
 static void prvTrafficLight( void *pvParameters );
 static void prvCarTrafficCreator( void *pvParameters );
 static void prvTrafficFlow( void *pvParameters );
+
+uint16_t light00;
 
 GPIO_InitTypeDef Shift1;
 GPIO_InitTypeDef Traffic_Lights;
@@ -189,18 +191,17 @@ uint16_t get_ADC_Value() {
 	return converted_value;
 }
 
-uint16_t changeLight(uint16_t light) {
-	uint16_t nextLight;
-
+static void changeLight(uint16_t light) {
 	if(light == TRAFFIC_GREEN) {
-		nextLight = TRAFFIC_AMBER;
+		GPIO_ResetBits(GPIOD, GPIO_Pin_2);
+		GPIO_SetBits(GPIOD, GPIO_Pin_0);
 	} else if(light == TRAFFIC_AMBER) {
-		nextLight = TRAFFIC_RED;
+		GPIO_ResetBits(GPIOD, GPIO_Pin_0);
+		GPIO_SetBits(GPIOD, GPIO_Pin_1);
 	} else if(light == TRAFFIC_RED) {
-		nextLight = TRAFFIC_GREEN;
+		GPIO_ResetBits(GPIOD, GPIO_Pin_1);
+		GPIO_SetBits(GPIOD, GPIO_Pin_2);
 	}
-
-	return nextLight;
 }
 
 uint32_t advanceCars(int newCar, uint32_t boardState) {
@@ -324,12 +325,17 @@ static void prvTrafficFlow(void *pvParameters) {
 }
 
 static void vChangeLight(xTimerHandle xTimer) {
-	uint16_t light;
-	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
+	xQueueReceive(xTrafficLightQueue, &light00, portMAX_DELAY);
 
-	light = changeLight(light);
+	if(light00 == TRAFFIC_GREEN) {
+			light00 = TRAFFIC_AMBER;
+		} else if(light00 == TRAFFIC_AMBER) {
+			light00 = TRAFFIC_RED;
+		} else if(light00 == TRAFFIC_RED) {
+			light00 = TRAFFIC_GREEN;
+		}
 
-	xQueueSend(xTrafficLightQueue, &light, 0);
+	xQueueSend(xTrafficLightQueue, &light00, 0);
 
 }
 
@@ -343,7 +349,7 @@ static void prvTrafficLight(void *pvParameters) {
 	xQueueReceive( xFlowQueue, &flow, portMAX_DELAY );
 	xQueueReceive(xTrafficLightQueue, &light, portMAX_DELAY);
 
-	xTrafficLightTimer = xTimerCreate("TrafficLightTimer", /* A text name, purely to help debugging. */
+	xTrafficLightTimer = xTimerCreate("TrafficLightTimer",
 													(GREEN_BASE * ((float)1 + (float)flow/(float)MAX_POT)) / portTICK_PERIOD_MS,		/* The timer period, in this case 1000ms (1s). */
 													pdFALSE,								/* This is a periodic timer, so xAutoReload is set to pdTRUE. */
 													( void * ) 0,						/* The ID is not used, so can be set to anything. */
@@ -354,6 +360,7 @@ static void prvTrafficLight(void *pvParameters) {
 
 	lastFlow = flow;
 	xQueueSend(xFlowQueue, &flow, 0);
+	xQueueSend(xTrafficLightQueue, &light, 0);
 	TickType_t xRemainingTime;
 
 	while(1) {
@@ -457,6 +464,7 @@ static void prvTrafficLight(void *pvParameters) {
 
 static void prvDisplayBoard(void *pvParameters) {
 	uint32_t ulReceivedValue;
+	uint16_t light;
 
 	while(1) {
 		// Run every 10mx
@@ -466,12 +474,14 @@ static void prvDisplayBoard(void *pvParameters) {
 //		GPIO_SetBits(GPIOD, TRAFFIC_AMBER);
 //		GPIO_SetBits(GPIOD, TRAFFIC_RED);
 //		GPIO_SetBits(GPIOD, )
-
+		xQueueReceive( xTrafficLightQueue, &light, portMAX_DELAY );
 		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
 
 		// Write to board
+		changeLight(light);
 		writeBoard(ulReceivedValue);
 
+		xQueueSend( xTrafficLightQueue, &light, 0);
 		xQueueSend( xQueue, &ulReceivedValue, 0);
 	}
 }
