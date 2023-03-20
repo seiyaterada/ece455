@@ -258,9 +258,12 @@ static void DD_Scheduler( void *pvParameters )
 static void Task_Generator( void *pvParameters )
 {
 	uint32_t taskId = 0;
-	List_Head active = list_head();
-	List_Head overdue = list_head();
-	List_Head complete = list_head();
+	// List_Head active = list_head();
+	// List_Head overdue = list_head();
+	// List_Head complete = list_head();
+	Task_Node active = NULL;
+	Task_Node overdue = NULL;
+	Task_Node complete = NULL;
 
 	while(1) {
 		TaskHandle_t taskHandle;

@@ -34,8 +34,47 @@ Task_Node *new_node(dd_task *task) {
 	return node;
 }
 
-void add_node(List_Head *head, Task_Node *node) {
-	if()
+void insertAtBegin(struct Task_Node **start_ref, struct dd_task *task) 
+{ 
+    struct Task_Node *ptr1 = (struct Task_Node*)malloc(sizeof(struct Task_Node)); 
+    ptr1->task = task; 
+    ptr1->next = *start_ref; 
+    *start_ref = ptr1; 
+} 
 
-	while(current->cursor)
-}
+
+void bubbleSort(struct Task_Node *start) 
+{ 
+    int swapped, i; 
+    struct Task_Node *ptr1; 
+    struct Task_Node *lptr = NULL; 
+  
+    /* Checking for empty list */
+    if (start == NULL) 
+        return; 
+  
+    do
+    { 
+        swapped = 0; 
+        ptr1 = start; 
+  
+        while (ptr1->next != lptr) 
+        { 
+            if (ptr1->data > ptr1->next->data) 
+            { 
+                swap(ptr1, ptr1->next); 
+                swapped = 1; 
+            } 
+            ptr1 = ptr1->next; 
+        } 
+        lptr = ptr1; 
+    } 
+    while (swapped); 
+} 
+
+void swap(struct Task_Node *a, struct Task_Node *b) 
+{ 
+    struct dd_task temp = a->task; 
+    a->task = b->task; 
+    b->task = temp; 
+} 
