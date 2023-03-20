@@ -35,7 +35,7 @@ typedef struct message {
 typedef struct Task_Node {
   dd_task *task;
   struct Task_Node *next;
-  struct Task_Node *prev;
+//   struct Task_Node *prev;
 } Task_Node;
 
 typedef struct List_Head {
@@ -47,6 +47,12 @@ typedef struct List_Head {
 } List_Head;
 
 List_Head list_head();
+
+Task_Node *new_node(dd_task *task);
+
+void insertAtBegin(struct Task_Node **start_ref, struct dd_task *task);
+
+void bubbleSort(struct Task_Node *start);
 
 
 
