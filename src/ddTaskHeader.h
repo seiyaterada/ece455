@@ -29,7 +29,7 @@ typedef struct dd_task {
 
 typedef struct message {
 	enum message_type type;
-	struct dd_task task;
+	void *data;
 } message;
 
 typedef struct Task_Node {
