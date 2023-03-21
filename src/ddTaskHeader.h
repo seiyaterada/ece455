@@ -38,15 +38,11 @@ typedef struct Task_Node {
   struct Task_Node *prev;
 } Task_Node;
 
-typedef struct List_Head {
-  Task_Node *head;
-  Task_Node *cursor;
-  Task_Node *cursor_prev;
-//  unsigned int length;
-//  unsigned int add_count;
-} List_Head;
+void insert(struct Task_Node** headRef, dd_task *task);
 
-List_Head list_head();
+dd_task* pop(struct Task_Node** headRef);
+
+
 
 
 

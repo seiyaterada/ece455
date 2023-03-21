@@ -14,28 +14,41 @@
 
 #include "ddTaskHeader.h"
 
-//List_Head *list_head() {
-//  List_Head *leader =
-//      (List_Head *)pvPortMalloc(sizeof(List_Head));
-//  leader->head = NULL;
-//  leader->cursor = NULL;
-//  leader->cursor_prev = NULL;
-////  leader->length = 0;
-////  leader->add_count = 0;
-//  return leader;
-//}
+void insert(struct Task_Node** headRef, dd_task *task) {
+    // Create a new node with the given data
+    struct Task_Node* newNode = (struct Task_Node*)malloc(sizeof(struct Task_Node));
+    newNode->task = task;
+    newNode->next = NULL;
 
-Task_Node *new_node(dd_task *task) {
-	Task_Node *node = (Task_Node *)pvPortMalloc(sizeof(Task_Node));
-	node->next = NULL;
-	node->prev = NULL;
-	node->task = task;
-
-	return node;
+    // If the list is empty or the new data is less than the head node's data,
+    // insert the new node at the beginning of the list
+    if (*headRef == NULL || task.absolute_deadline < (*headRef)->task.absolute_deadline) {
+        newNode->next = *headRef;
+        *headRef = newNode;
+    } else {
+        // Traverse the list to find the appropriate position to insert the new node
+        struct Task_Node* curr = *headRef;
+        while (curr->next != NULL && task.absolute_deadline > curr->next->task.absolute_deadline) {
+            curr = curr->next;
+        }
+        newNode->next = curr->next;
+        curr->next = newNode;
+    }
 }
 
-void add_node(List_Head *head, Task_Node *node) {
-	if()
-
-	while(current->cursor)
+// Remove the first node from the list and return its data
+dd_task* pop(struct Task_Node** headRef) {
+	if (*headRef == NULL) {
+		return NULL;
+	}
+	struct Task_Node* temp = *headRef;
+	*headRef = (*headRef)->next;
+	dd_task* task = temp->task;
+	free(temp);
+	return task;
 }
+
+// How to use
+// create new head
+// struct Task_Node* head = NULL
+// insert(&head, task)
