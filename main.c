@@ -138,6 +138,9 @@ functionality.
 #include <stdint.h>
 #include <stdio.h>
 #include "stm32f4_discovery.h"
+
+#include "ddTaskHeader.h"
+
 /* Kernel includes. */
 #include "stm32f4xx.h"
 #include "../FreeRTOS_Source/include/FreeRTOS.h"
@@ -151,39 +154,59 @@ functionality.
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 100
 
+#define DD_PRIORITY_UNSCHEDULED 1
 
-static xQueueHandle xQueue = NULL;
+#define TASK_1_EXEC_TIME 95
+#define TASK_1_PERIOD 500
+
+#define TASK_2_EXEC_TIME 150
+#define TASK_2_PERIOD 500
+
+#define TASK_3_EXEC_TIME 250
+#define TASK_3_PERIOD 750
+
+static void Periodic_Task_1( void *pvParameters );
+static void Task_Generator( void *pvParameters );
+static void DD_Scheduler( void *pvParameters );
+static void Monitor_Task( void *pvParameters );
+
+
+static xQueueHandle xMessageQueue = NULL;
 xQueueHandle xQueue_handle = 0;
 
-enum task_type {PERIODIC,APERIODIC};
-enum message_type {CREATE_TASK, DELETE_TASK, GET_ACTIVE, GET_COMPLETE, GET_OVERDUE};
-
-struct dd_task {
-	TaskHandle_t t_handle;
-	enum task_type type;
-	uint32_t task_id;
-	uint32_t release_time;
-	uint32_t absolute_deadline;
-	uint32_t completion_time;
-};
-
-struct dd_task_list {
-	struct dd_task task;
-	struct dd_task_list *next_task;
-};
-
-struct message {
-	enum message_type type;
-	struct dd_task task;
-};
+//enum task_type {PERIODIC,APERIODIC};
+//enum message_type {CREATE_TASK, DELETE_TASK, GET_ACTIVE, GET_COMPLETE, GET_OVERDUE};
+//
+//struct dd_task {
+//	TaskHandle_t t_handle;
+//	enum task_type type;
+//	uint32_t task_id;
+//	uint32_t release_time;
+//	uint32_t absolute_deadline;
+//	uint32_t completion_time;
+//};
+//
+//struct dd_task_list {
+//	struct dd_task task;
+//	struct dd_task_list *next_task;
+//};
+//
+//struct message {
+//	enum message_type type;
+//	struct dd_task task;
+//};
+//
+//struct dd_task_list active;
+//struct dd_task_list overdue;
+//struct dd_task_list completed;
 
 
 /*-----------------------------------------------------------*/
 
 int main(void)
 {
-	xQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof( struct message ));
-	vQueueAddToRegistry(xQueue, "MainQueue");
+	xMessageQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof( void ));
+	vQueueAddToRegistry(xMessageQueue, "MessageQueue");
 	return 0;
 }
 
@@ -191,20 +214,28 @@ int main(void)
 /*-----------------------------------------------------------*/
 
 void dd_create_task( TaskHandle_t t_handle, enum task_type type, uint32_t task_id, uint32_t absolute_deadline) {
-	struct dd_task newTask = {
-		.t_handle = t_handle,
-		.type = type,
-		.task_id = task_id,
-		.absolute_deadline = absolute_deadline,
-	};
-	struct message createMessage = {
-		.type = CREATE_TASK,
-		.task = newTask,
-	};
-	xQueueSend(xQueue, &createMessage, 0);
-	xQueueReceive(xQueue, &newTask, portMAX_DELAY);
+	dd_task *newTask = (dd_task *)pvPortMalloc(sizeof(dd_task));
+	newTask->t_handle = t_handle;
+	newTask->type = type;
+	newTask->task_id = task_id;
+	newTask->absolute_deadline = absolute_deadline;
 
-	return newTask;
+	// struct dd_task newTask = {
+	// 	.t_handle = t_handle,
+	// 	.type = type,
+	// 	.task_id = task_id,
+	// 	.absolute_deadline = absolute_deadline,
+	// };
+	message *createMessage = (message *)pvPortMalloc(sizeof(message));
+	createMessage->type = CREATE_TASK;
+	createMessage->data = newTask;
+	// struct message createMessage = {
+	// 	.type = CREATE_TASK,
+	// 	.task = newTask,
+	// };
+	xQueueSend(xMessageQueue, &createMessage, 0);
+	xQueueReceive(xMessageQueue, &newTask, portMAX_DELAY);
+
 }
 
 /*-----------------------------------------------------------*/
@@ -216,21 +247,42 @@ void dd_delete_task(uint32_t task_id) {
 
 /*-----------------------------------------------------------*/
 
-static void dd_return_active_list( void *pvParameters )
+Task_Node dd_return_active_list( void *pvParameters )
 {
-	return 0;
+	Task_Node data;
+	message active_list_message = {
+		.type = GET_ACTIVE,
+	};
+	xQueueSend(xMessageQueue, &active_list_message, 0);
+
+	xQueueReceive(xMessageQueue, &data, portMAX_DELAY);
+	return data;
 }
 
 /*-----------------------------------------------------------*/
 
-static void dd_return_overdue_list( void *pvParameters )
+Task_Node dd_return_overdue_list( void *pvParameters )
 {
-	return 0;
+	Task_Node data;
+	message active_list_message = {
+		.type = GET_OVERDUE,
+	};
+	xQueueSend(xMessageQueue, &active_list_message, 0);
+
+	xQueueReceive(xMessageQueue, &data, portMAX_DELAY);
+	return data;
 }
 
-static void dd_return_complete_list( void *pvParameters )
+Task_Node dd_return_complete_list( void *pvParameters )
 {
-	return 0;
+	Task_Node data;
+	message active_list_message = {
+		.type = GET_COMPLETE,
+	};
+	xQueueSend(xMessageQueue, &active_list_message, 0);
+
+	xQueueReceive(xMessageQueue, &data, portMAX_DELAY);
+	return data;
 }
 
 
@@ -238,28 +290,135 @@ static void dd_return_complete_list( void *pvParameters )
 
 static void DD_Scheduler( void *pvParameters )
 {
-	return 0;
+
+	Task_Node *active = NULL;
+	Task_Node *complete = NULL;
+	Task_Node *overdue = NULL;
+
+//	qh_request = xQueueCreate(5, sizeof(void *));
+//	qh_response = xQueueCreate(5, sizeof(void *));
+//	vQueueAddToRegistry(qh_request, "DDS Req");
+//	vQueueAddToRegistry(qh_response, "DDS Res");
+
+	message req_message;
+	message res_message;
+
+	while(1) {
+		xQueueReceive(xMessageQueue, &req_message, portMAX_DELAY);
+		TickType_t time_now = xTaskGetTickCount();
+		for (Task_node current = active; current->next != NULL; current->next) {
+			dd_task task = current->task;
+
+			if(time_now < task->absolute_deadline) {
+				break;
+			}
+			// Overdue
+			// 1. unlink node from active list
+			// 2. add unlinked node to overdue list
+		}
+
+		switch (req_message->type) {
+			case(CREATE_TASK): {
+				dd_task current_task = (dd_task)req_message->data;
+				uint32_t prio = DD_PRIORITY_UNSCHEDULED;
+
+				// 1. set priority of task
+
+				// 2. Add task to active list
+				current_task->release_time = time_now;
+				vTaskPrioritySet(current_task->t_handle, prio);
+				vTaskResume(current_task->t_handle);
+				req_message->data = current_task;
+				xQueueSend(xMessageQueue, &req_message, 0);
+				break;
+			}
+			case(DELETE_TASK): {
+				uint32_t task_id = (uint32_t)req_message->data;
+				Task_Node node_delete = getNode(task_id);
+				// Remove from active list
+				pop(&active, node_delete);
+
+				// Set completion time
+				node_delete->task->completion_time = time_now;
+
+				// Insert task into completed list
+				insert(&completed, node_delete);
+
+				// Set priorities of tasks
+
+				break;
+			}
+			case(GET_ACTIVE): {
+				res_message->type = GET_COMPLETE;
+				res_message->data = active;
+				xQueueSend(xMessageQueue, &active, 0);
+				break;
+			}
+			case(GET_COMPLETE): {
+				res_message->type = GET_COMPLETE;
+				res_message->data = complete;
+				xQueueSend(xMessageQueue, &res_message, 0);
+				break;
+			}
+			case(GET_OVERDUE): {
+				res_message->type = GET_OVERDUE;
+				res_message->data = overdue;
+				xQueueSend(xMessageQueue, &res_message, 0);
+				break;
+			}
+		}
+	}
 }
 
 static void Task_Generator( void *pvParameters )
 {
-	uint32_t taskId = 0;
-	while(1) {
-		vTaskDelay(100);
+	while (1) {
+    TaskHandle_t task_handle;
+    xTaskCreate(Periodic_Task_1,          // TaskFunction_t Function
+                "Task_1",                 // const char *const pcName
+                configMINIMAL_STACK_SIZE, // configSTACK_DEPTH_TYPE usStackDepth
+                NULL,                     // void *const pvParameters
+                DD_PRIORITY_UNSCHEDULED,  // UBaseType_t uxPriority
+                &(task_handle)            // TaskHandle_t *const pxCreatedTask
+    );
+    if (task_handle == NULL) {
+      printf("Generator xTaskCreate task handle is NULL\n");
+      return;
+    }
+    // Let the DDS start it later with a new priority
+    vTaskSuspend(task_handle);
 
-		dd_create_task()
-	};
-	return 0;
-}
-
-static void User_Tasks( void *pvParameters )
-{
-	return 0;
+    create_dd_task(
+        task_handle,                        // TaskHandle_t task_handle,
+        PERIODIC,                           // DD_Task_Enum_t type,
+        1,                                  // uint32_t id,
+        xTaskGetTickCount() + TASK_1_PERIOD // uint32_t absolute_deadline);
+    );
+    // Delay THIS generator task. Not the created one
+    vTaskDelay(TASK_1_PERIOD);
+  }
 }
 
 static void Monitor_Task( void *pvParameters )
 {
 	return 0;
+}
+
+void Periodic_Task_1(void *pvParameters) {
+  TickType_t current_tick = xTaskGetTickCount();
+  TickType_t previous_tick = 0;
+  TickType_t execution_time = TASK_1_EXEC_TIME / portTICK_PERIOD_MS;
+//  printf("Task 1 (F-Task Priority: %u; Tick: %u)\n",
+//         (unsigned int)uxTaskPriorityGet(NULL), (unsigned int)current_tick);
+  while (execution_time) {
+    current_tick = xTaskGetTickCount();
+    if (current_tick == previous_tick)
+      continue;
+    previous_tick = current_tick;
+    execution_time--;
+  }
+  // There's no need to vTaskDelay here. If we're done we're done.
+  delete_dd_task(1);
 }
 
 
@@ -272,7 +431,7 @@ void vApplicationMallocFailedHook( void )
 
 	Called if a call to pvPortMalloc() fails because there is insufficient
 	free memory available in the FreeRTOS heap.  pvPortMalloc() is called
-	internally by FreeRTOS API functions that create tasks, queues, software 
+	internally by FreeRTOS API functions that create tasks, queues, software
 	timers, and semaphores.  The size of the FreeRTOS heap is set by the
 	configTOTAL_HEAP_SIZE configuration constant in FreeRTOSConfig.h. */
 	for( ;; );
@@ -324,4 +483,3 @@ static void prvSetupHardware( void )
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
 }
-
