@@ -154,8 +154,29 @@ functionality.
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 100
 
+#define DD_PRIORITY_UNSCHEDULED 1
 
-static xQueueHandle xQueue = NULL;
+#define TASK_1_EXEC_TIME 95
+#define TASK_1_PERIOD 500
+
+#define TASK_2_EXEC_TIME 150
+#define TASK_2_PERIOD 500
+
+#define TASK_3_EXEC_TIME 250
+#define TASK_3_PERIOD 750
+
+static void Periodic_Task_1( void *pvParameters );
+static void Task_1_Generator( void *pvParameters );
+static void DD_Scheduler( void *pvParameters );
+static void Monitor_Task( void *pvParameters );
+
+static dd_task_list active;
+static dd_task_list overdue;
+static dd_task_list complete;
+
+
+static xQueueHandle xMessageQueue = NULL;
+static xQueueHandle xMonitorQueue = NULL;
 xQueueHandle xQueue_handle = 0;
 
 //enum task_type {PERIODIC,APERIODIC};
@@ -185,74 +206,192 @@ xQueueHandle xQueue_handle = 0;
 //struct dd_task_list completed;
 
 
+
+TaskHandle_t Periodic_task_gen_handle_1;
 /*-----------------------------------------------------------*/
 
 int main(void)
 {
-	xMessageQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof( struct message ));
+	create_task_list(&active);
+	create_task_list(&overdue);
+	create_task_list(&complete);
+	printf("HERE\n");
+
+	xMessageQueue = xQueueCreate(5, sizeof( message ));
 	vQueueAddToRegistry(xMessageQueue, "MessageQueue");
+	xMonitorQueue = xQueueCreate(5, sizeof( message ));
+	vQueueAddToRegistry(xMonitorQueue, "MonitorQueue");
+
+	xTaskCreate(DD_Scheduler, "DD Scheduler Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_SCHEDULER, NULL);
+	xTaskCreate(Monitor_Task, "Monitor Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_MONITOR, NULL);
+	xTaskCreate(Task_1_Generator, "Periodic Task 1", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_1);
 	return 0;
 }
 
 
 /*-----------------------------------------------------------*/
 
-void dd_create_task( TaskHandle_t t_handle, enum task_type type, uint32_t task_id, uint32_t absolute_deadline) {
-	dd_task *newTask = (dd_task *)pvPortMalloc(sizeof(dd_task));
-	newTask->t_handle = t_handle;
-	newTask->type = type;
-	newTask->task_id = task_id;
-	newTask->absolute_deadline = absolute_deadline;
-	
-	// struct dd_task newTask = {
-	// 	.t_handle = t_handle,
-	// 	.type = type,
-	// 	.task_id = task_id,
-	// 	.absolute_deadline = absolute_deadline,
-	// };
-	message *createMessage = (message *)pvPortMalloc(sizeof(message));
-	createMessage->type = CREATE_TASK;
-	createMessage->data = newTask;
-	// struct message createMessage = {
-	// 	.type = CREATE_TASK,
-	// 	.task = newTask,
-	// };
-	xQueueSend(xQueue, &createMessage, 0);
-	xQueueReceive(xQueue, &newTask, portMAX_DELAY);
+uint32_t dd_create_task(dd_task_node task) {
+	if(task == NULL) {
+		printf("ERROR: task null");
+		return 0;
+	}
 
-//	return newTask;
-}
+	xTaskCreate(task->t_function,
+				"test",
+				configMINIMAL_STACK_SIZE,
+				(void*)task,
+				DD_TASK_PRIORITY_MINIMUM,
+				&(task->t_handle)
+	);
 
-/*-----------------------------------------------------------*/
+	vTaskSuspend(task->t_handle);
 
-void dd_delete_task(uint32_t task_id) {
-	return 0;
-}
-
-
-/*-----------------------------------------------------------*/
-
-static void dd_return_active_list( void *pvParameters )
-{
-	message active_list_message = {
-		.type = GET_ACTIVE,
+	message newMessage = {
+			CREATE_TASK,
+			xTaskGetCurrentTaskHandle(),
+			task
 	};
-	xQueueSend(xMessageQueue, active_list_message, 0);
-	
-	xQueueReceive(xMessageQueue, &data, portMAX_DELAY);
-	return 0;
+
+	if(xMessageQueue != NULL) {
+		if(xQueueSend(xMessageQueue, &newMessage, portMAX_DELAY) != pdPASS) {
+			printf("ERROR: Couldn't send request");
+			return 0;
+		}
+	} else {
+		printf("ERROR: Queue does not exist");
+		return 0;
+	}
+
+	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+	vTaskResume(task->t_handle);
+
+	return 1;
 }
 
 /*-----------------------------------------------------------*/
 
-static void dd_return_overdue_list( void *pvParameters )
-{
-	return 0;
+uint32_t dd_delete_task(uint32_t task_id) {
+	if(task_id == 0) {
+		printf("ERROR: Null ID");
+		return 0;
+	}
+
+	message newMessage = {
+			DELETE_TASK,
+			task_id,
+			NULL
+	};
+
+
+	if(xMessageQueue != NULL) {
+			if(xQueueSend(xMessageQueue, &newMessage, portMAX_DELAY) != pdPASS) {
+				printf("ERROR: Couldn't send request");
+				return 0;
+			}
+		} else {
+			printf("ERROR: Queue does not exist");
+			return 0;
+	}
+
+	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+//	vTaskDelete(task->t_handle);
+
+	return 1;
 }
 
-static void dd_return_complete_list( void *pvParameters )
+
+/*-----------------------------------------------------------*/
+
+uint32_t dd_return_active_list( void )
 {
-	return 0;
+	message newMessage = {
+			GET_ACTIVE,
+			NULL,
+			NULL
+	};
+
+	if(xMessageQueue != NULL) {
+		if(xQueueSend(xMessageQueue, &newMessage, portMAX_DELAY) != pdPASS) {
+			printf("ERROR: Couldn't send request");
+			return 0;
+		}
+	} else {
+		printf("ERROR: Queue does not exist");
+		return 0;
+	}
+
+	if(xMonitorQueue != NULL) {
+		if(xQueueReceive(xMonitorQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
+			printf("Active: \n%s\n,", (char*)(newMessage.data));
+			vPortFree(newMessage.data);
+			newMessage.data = NULL;
+		}
+	}
+
+	return 1;
+}
+
+/*-----------------------------------------------------------*/
+
+uint32_t dd_return_overdue_list( void  )
+{
+	message newMessage = {
+				GET_OVERDUE,
+				NULL,
+				NULL
+		};
+
+		if(xMessageQueue != NULL) {
+			if(xQueueSend(xMessageQueue, &newMessage, portMAX_DELAY) != pdPASS) {
+				printf("ERROR: Couldn't send request");
+				return 0;
+			}
+		} else {
+			printf("ERROR: Queue does not exist");
+			return 0;
+		}
+
+		if(xMonitorQueue != NULL) {
+			if(xQueueReceive(xMonitorQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
+				printf("Overdue: \n%s\n,", (char*)(newMessage.data));
+				vPortFree(newMessage.data);
+				newMessage.data = NULL;
+			}
+		}
+
+		return 1;
+}
+
+uint32_t dd_return_complete_list( void )
+{
+	message newMessage = {
+				GET_COMPLETE,
+				NULL,
+				NULL
+		};
+
+		if(xMessageQueue != NULL) {
+			if(xQueueSend(xMessageQueue, &newMessage, portMAX_DELAY) != pdPASS) {
+				printf("ERROR: Couldn't send request");
+				return 0;
+			}
+		} else {
+			printf("ERROR: Queue does not exist");
+			return 0;
+		}
+
+		if(xMonitorQueue != NULL) {
+			if(xQueueReceive(xMonitorQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
+				printf("Complete: \n%s\n,", (char*)(newMessage.data));
+				vPortFree(newMessage.data);
+				newMessage.data = NULL;
+			}
+		}
+
+		return 1;
 }
 
 
@@ -260,65 +399,127 @@ static void dd_return_complete_list( void *pvParameters )
 
 static void DD_Scheduler( void *pvParameters )
 {
-
-	Task_Node *active = NULL;
-	Task_Node *complete = NULL;
-	Task_Node *overdue = NULL;
-
-	qh_request = xQueueCreate(5, sizeof(void *));
-	qh_response = xQueueCreate(5, sizeof(void *));
-	vQueueAddToRegistry(qh_request, "DDS Req");
-	vQueueAddToRegistry(qh_response, "DDS Res");
-
-	message *req_message;
+	message res_message;
+	dd_task_node task_node = NULL;
 
 	while(1) {
-		struct dd_task task;
 
-		xQueueReceive(xQueue, &task, portMAX_DELAY);
-		TickType_t time_now = xTaskGetTickCount();
+		if(xQueueReceive(xMessageQueue, (void*)&res_message, portMAX_DELAY) == pdTRUE) {
+			transfer_overdue_list(&active, &overdue);
 
+			while(overdue.list_length > 5) {
+				printf("\nRemoving items from overdue\n");
+				remove_head(&overdue);
+			}
+
+			switch(res_message.type) {
+				case(CREATE_TASK): {
+					task_node = (dd_task_node)res_message.data;
+					insert(task_node, &active);
+
+					xTaskNotifyGive(res_message.sender);
+					break;
+				}
+
+				case(DELETE_TASK): {
+					task_node = (dd_task_node)res_message.data;
+					insert(task_node, &complete);
+					removeNode(task_node->task_id, &active, false);
+
+					free_node(task_node);
+
+					xTaskNotifyGive(res_message.sender);
+					break;
+				}
+
+				case(GET_ACTIVE): {
+					res_message.data = (void*)format_list(&active);
+
+					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
+						xQueueReset(xMonitorQueue);
+					}
+
+					if(xMonitorQueue != NULL) {
+						if(xQueueSend(xMonitorQueue, &res_message, (TickType_t) portMAX_DELAY) != pdPASS); {
+							printf("ERROR: couldn't send request");
+							break;
+						}
+					}
+
+					break;
+				}
+
+				case(GET_OVERDUE): {
+					res_message.data = (void*)format_list(&overdue);
+
+					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
+						xQueueReset(xMonitorQueue);
+					}
+
+					if(xMonitorQueue != NULL) {
+						if(xQueueSend(xMonitorQueue, &res_message, (TickType_t) portMAX_DELAY) != pdPASS); {
+							printf("ERROR: couldn't send request");
+							break;
+						}
+					}
+
+					break;
+				}
+
+				case(GET_COMPLETE): {
+					res_message.data = (void*)format_list(&complete);
+
+					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
+						xQueueReset(xMonitorQueue);
+					}
+
+					if(xMonitorQueue != NULL) {
+						if(xQueueSend(xMonitorQueue, &res_message, (TickType_t) portMAX_DELAY) != pdPASS); {
+							printf("ERROR: couldn't send request");
+							break;
+						}
+					}
+
+					break;
+				}
+			}
+		}
 	}
-	return 0;
 }
 
-static void Task_Generator( void *pvParameters )
-{
-	while (1) {
-    TaskHandle_t task_handle;
-    xTaskCreate(Periodic_Task_1,          // TaskFunction_t Function
-                "Task_1",                 // const char *const pcName
-                configMINIMAL_STACK_SIZE, // configSTACK_DEPTH_TYPE usStackDepth
-                NULL,                     // void *const pvParameters
-                DD_PRIORITY_UNSCHEDULED,  // UBaseType_t uxPriority
-                &(task_handle)            // TaskHandle_t *const pxCreatedTask
-    );
-    if (task_handle == NULL) {
-      printf("Generator xTaskCreate task handle is NULL\n");
-      return;
-    }
-    // Let the DDS start it later with a new priority
-    vTaskSuspend(task_handle);
-
-    create_dd_task(
-        task_handle,                        // TaskHandle_t task_handle,
-        PERIODIC,                           // DD_Task_Enum_t type,
-        1,                                  // uint32_t id,
-        xTaskGetTickCount() + TASK_1_PERIOD // uint32_t absolute_deadline);
-    );
-    // Delay THIS generator task. Not the created one
-    vTaskDelay(TASK_1_PERIOD);
-  }
-}
-
-static void User_Tasks( void *pvParameters )
-{
-	return 0;
-}
 
 static void Monitor_Task( void *pvParameters )
 {
-	return 0;
+
+	while(1) {
+		printf("\nMonitoring Task: Current Time = %u, Priority = %u\n", (unsigned int)xTaskGetTickCount(), (unsigned int)uxTaskPriorityGet( NULL ));
+		dd_return_active_list();
+		dd_return_overdue_list();
+		dd_return_complete_list();
+
+		vTaskDelay(100);
+	}
+}
+
+static void Task_1_Generator( void *pvParameters )
+{
+	while (1) {
+
+    dd_task_node task = allocate();
+
+    task->t_function = Periodic_Task_1;
+    task->task_name = "Periodic_Task_1";
+    task->type = PERIODIC;
+
+    TickType_t time = xTaskGetTickCount();
+    task->release_time = time;
+    task->absolute_deadline = time + TASK_1_PERIOD;
+
+    dd_create_task(task);
+
+    // Delay THIS generator task. Not the created one
+    vTaskDelay(TASK_1_PERIOD);
+  }
 }
 
 void Periodic_Task_1(void *pvParameters) {
@@ -335,7 +536,7 @@ void Periodic_Task_1(void *pvParameters) {
     execution_time--;
   }
   // There's no need to vTaskDelay here. If we're done we're done.
-  delete_dd_task(1);
+  dd_delete_task(1);
 }
 
 
