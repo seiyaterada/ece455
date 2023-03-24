@@ -1,9 +1,10 @@
-/*
- * linkedlistHelper.c
- *
- *  Created on: Mar 14, 2023
- *      Author: kaidenrivett
- */
+
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "stm32f4xx.h"
 #include "../FreeRTOS_Source/include/FreeRTOS.h"
@@ -14,40 +15,244 @@
 
 #include "ddTaskHeader.h"
 
-void insert(struct Task_Node** headRef, dd_task *task) {
-    // Create a new node with the given data
-    struct Task_Node* newNode = (struct Task_Node*)malloc(sizeof(struct Task_Node));
-    newNode->task = task;
-    newNode->next = NULL;
+dd_task_node allocate() {
+	dd_task_node newNode = (dd_task_node)pvPortMalloc(sizeof(dd_task_node));
 
-    // If the list is empty or the new data is less than the head node's data,
-    // insert the new node at the beginning of the list
-    if (*headRef == NULL || task.absolute_deadline < (*headRef)->task.absolute_deadline) {
-        newNode->next = *headRef;
-        *headRef = newNode;
-    } else {
-        // Traverse the list to find the appropriate position to insert the new node
-        struct Task_Node* curr = *headRef;
-        while (curr->next != NULL && task.absolute_deadline > curr->next->task.absolute_deadline) {
-            curr = curr->next;
-        }
-        newNode->next = curr->next;
-        curr->next = newNode;
-    }
+	newNode->t_handle = NULL;
+	newNode->t_function = NULL;
+	newNode->type = UNDEFINED;
+	newNode->absolute_deadline = 0;
+	newNode->completion_time = 0;
+	newNode->task_id = 0;
+	newNode->task_name = "";
+	newNode->next = NULL;
+	newNode->prev = NULL;
+
+	return newNode;
 }
 
-// Remove the first node from the list and return its data
-dd_task* pop(struct Task_Node** headRef) {
-	if (*headRef == NULL) {
-		return NULL;
+bool free_node(dd_task_node node) {
+	if(node == NULL) {
+		printf("ERROR: No node to free");
+		return false;
 	}
-	struct Task_Node* temp = *headRef;
-	*headRef = (*headRef)->next;
-	dd_task* task = temp->task;
-	free(temp);
-	return task;
+
+	node->t_handle = NULL;
+	node->t_function = NULL;
+	node->type = UNDEFINED;
+	node->absolute_deadline = 0;
+	node->completion_time = 0;
+	node->task_id = 0;
+	node->task_name = "";
+	node->next = NULL;
+	node->prev = NULL;
+
+	vPortFree((void*) node);
+
+	return true;
 }
 
+void create_task_list(dd_task_list_node task_list) {
+	if(task_list == NULL) {
+		printf("ERROR: No list given");
+		return;
+	}
+
+	task_list->list_length = 0;
+	task_list->head = NULL;
+	task_list->tail = NULL;
+}
+
+void insert(dd_task_node task, dd_task_list_node task_list) {
+	// If list is empty
+	if(task_list->list_length == 0) {
+		task_list->list_length = 1;
+		task_list->head = task;
+		task_list->tail = task;
+		vTaskPrioritySet(task->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
+		return;
+	}
+
+	// If list is not empty iterate through list and place task in right place
+	dd_task_node itr = task_list->head;
+
+	// Get highest prio value
+	uint32_t prio = uxTaskPriorityGet(itr->t_handle);
+
+	prio++;
+
+	while(itr != NULL) {
+		if(task->absolute_deadline < itr->absolute_deadline) {
+			if(itr == task_list->head) {
+				task_list->head = task;
+			}
+
+			task->next = itr;
+			task->prev = itr->prev;
+			itr->prev = task;
+
+			task_list->list_length++;
+
+			vTaskPrioritySet(task->t_handle, prio);
+			return;
+		} else {
+			if(itr->next == NULL) {
+				task->next = NULL;
+				task->prev = itr;
+				itr->next = task;
+				task_list->tail = task;
+
+				task_list->list_length++;
+				vTaskPrioritySet(itr->t_handle, prio);
+				vTaskPrioritySet(task->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
+				return;
+			}
+
+			vTaskPrioritySet(itr->t_handle, prio);
+			prio--;
+			itr = itr->next;
+		}
+	}
+}
+
+void removeNode(uint32_t taskId, dd_task_list_node task_list, bool clear) {
+	if(task_list->list_length == 0) {
+		printf("ERROR: List empty");
+		return;
+	}
+
+	dd_task_node itr = task_list->head;
+
+	// Grab highest prio
+	uint32_t prio = uxTaskPriorityGet(itr->t_handle);
+
+	while(itr != NULL) {
+		if(itr->task_id == taskId) {
+			if(task_list->list_length == 1) {
+				task_list->head = NULL;
+				task_list->tail = NULL;
+			} else if(task_list->head->task_id == taskId) {
+				task_list->head = itr->next;
+				itr->next->prev = NULL;
+			} else if(task_list->tail->task_id == taskId) {
+				task_list->head = itr->prev;
+				itr->prev->next = NULL;
+			} else{
+				itr->prev->next = itr->next;
+				itr->next->prev = itr->prev;
+			}
+
+			task_list->list_length--;
+
+			itr->prev = NULL;
+			itr->next = NULL;
+
+			if(clear) {
+				free_node(itr);
+			}
+
+			return;
+		}
+
+		prio--;
+		vTaskPrioritySet(itr->t_handle, prio);
+		itr = itr->next;
+	}
+
+	itr = task_list->tail;
+	vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
+	prio = DD_TASK_PRIORITY_EXECUTION_BASE;
+
+	while(itr->prev != NULL) {
+		prio++;
+		itr = itr->prev;
+		vTaskPrioritySet(itr->t_handle, prio);
+	}
+	return;
+}
+
+void remove_head(dd_task_list_node task_list) {
+	if(task_list->list_length == 0) {
+		printf("ERROR: List empty");
+		return;
+	}
+
+	dd_task_node head = task_list->head;
+
+	if(task_list->list_length == 1) {
+		task_list->head = NULL;
+		task_list->tail = NULL;
+	} else {
+		task_list->head = head->next;
+		head->next->prev = NULL;
+	}
+
+	task_list->list_length--;
+
+	head->prev = NULL;
+	head->next = NULL;
+
+	free_node(head);
+}
+
+void transfer_overdue_list(dd_task_list_node active, dd_task_list_node overdue) {
+	dd_task_node itr = active->head;
+
+	TickType_t time = xTaskGetTickCount();
+
+	while(itr != NULL) {
+		if(itr->absolute_deadline < time) {
+			removeNode(itr, active, false);
+
+			if(overdue->list_length == 0) {
+				overdue->list_length = 1;
+				overdue->head = itr;
+				overdue->tail = itr;
+			} else {
+				dd_task_node temp = overdue->tail;
+				overdue->tail = itr;
+				temp->next = itr;
+				itr->prev = temp;
+
+				overdue->list_length++;
+			}
+
+			if(itr->type == PERIODIC) {
+				vTaskSuspend(itr->t_handle);
+				vTaskDelete(itr->t_handle);
+			}
+		} else {
+			return;
+		}
+
+		itr = itr->next;
+	}
+}
+
+char* format_list(dd_task_list_node task_list) {
+	uint32_t size = task_list->list_length;
+	uint32_t buffer = ((configMAX_TASK_NAME_LEN + 50) * (size + 1));
+
+	char* output = (char*)pvPortMalloc(buffer);
+	output[0] = '\0';
+
+	if(size == 0) {
+		char buffer[20] = ("List is empty.\n");
+    	strcat( output, buffer );
+    	return output;
+	}
+
+	dd_task_node itr = task_list->head; // start from head
+	    while( itr != NULL )
+	    {
+	        char itr_buffer[70];
+	        sprintf( itr_buffer, "Task Name = %s, Deadline = %u \n", itr->task_name, (unsigned int) itr->absolute_deadline ); // need typecast to unsigned int to avoid warning.
+	        strcat( output, itr_buffer );
+
+	        itr = itr->next;         // Go to the next element in the list
+	    }
+	    return output;
+}
 // How to use
 // create new head
 // struct Task_Node* head = NULL
