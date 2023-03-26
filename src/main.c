@@ -170,6 +170,8 @@ static void Task_1_Generator( void *pvParameters );
 static void DD_Scheduler( void *pvParameters );
 static void Monitor_Task( void *pvParameters );
 
+static void prvSetupHardware(void);
+
 static dd_task_list active;
 static dd_task_list overdue;
 static dd_task_list complete;
@@ -185,6 +187,8 @@ TaskHandle_t Periodic_task_gen_handle_1;
 
 int main(void)
 {
+	prvSetupHardware();
+
 	create_task_list(&active);
 	create_task_list(&overdue);
 	create_task_list(&complete);
@@ -197,7 +201,6 @@ int main(void)
 	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 
-//	xTaskCreate(Periodic_Task_1, "Periodic Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_SCHEDULER, NULL);
 	xTaskCreate(DD_Scheduler, "DD Scheduler Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_SCHEDULER, NULL);
 	xTaskCreate(Monitor_Task, "Monitor Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_MONITOR, NULL);
 	xTaskCreate(Task_1_Generator, "Periodic Task 1", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_1);
@@ -220,10 +223,15 @@ uint32_t dd_create_task(dd_task_node task) {
 	xTaskCreate(task->t_function,
 				task->task_name,
 				configMINIMAL_STACK_SIZE,
-				NULL,
-				DD_TASK_PRIORITY_SCHEDULER,
-				NULL
+				(void*)task,
+				DD_TASK_PRIORITY_MINIMUM,
+				&(task->t_handle)
 	);
+
+	if(task->t_handle == NULL) {
+		printf("ERROR: CREATE task error\n");
+		return 0;
+	}
 
 	vTaskSuspend(task->t_handle);
 
@@ -503,9 +511,9 @@ static void Task_1_Generator( void *pvParameters )
     task->task_name = "Periodic_Task_1";
     task->type = PERIODIC;
 
-    TickType_t time = xTaskGetTickCount();
-    task->release_time = time;
-    task->absolute_deadline = time + TASK_1_PERIOD;
+    TickType_t current_time = xTaskGetTickCount();
+    task->release_time = current_time;
+    task->absolute_deadline = current_time + TASK_1_PERIOD;
 
     dd_create_task(task);
 
