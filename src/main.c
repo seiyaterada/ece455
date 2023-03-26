@@ -191,9 +191,13 @@ int main(void)
 
 	xMessageQueue = xQueueCreate(5, sizeof( message ));
 	vQueueAddToRegistry(xMessageQueue, "MessageQueue");
-	xMonitorQueue = xQueueCreate(5, sizeof( message ));
+	xMonitorQueue = xQueueCreate(2, sizeof( message ));
 	vQueueAddToRegistry(xMonitorQueue, "MonitorQueue");
 
+	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
+
+
+//	xTaskCreate(Periodic_Task_1, "Periodic Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_SCHEDULER, NULL);
 	xTaskCreate(DD_Scheduler, "DD Scheduler Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_SCHEDULER, NULL);
 	xTaskCreate(Monitor_Task, "Monitor Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_MONITOR, NULL);
 	xTaskCreate(Task_1_Generator, "Periodic Task 1", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_1);
@@ -211,13 +215,14 @@ uint32_t dd_create_task(dd_task_node task) {
 		printf("ERROR: task null");
 		return 0;
 	}
+	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 	xTaskCreate(task->t_function,
 				task->task_name,
 				configMINIMAL_STACK_SIZE,
-				(void*)task,
-				DD_TASK_PRIORITY_MINIMUM,
-				&(task->t_handle)
+				NULL,
+				DD_TASK_PRIORITY_SCHEDULER,
+				NULL
 	);
 
 	vTaskSuspend(task->t_handle);
