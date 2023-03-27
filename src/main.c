@@ -167,6 +167,8 @@ functionality.
 
 static void Periodic_Task_1( void *pvParameters );
 static void Task_1_Generator( void *pvParameters );
+static void Periodic_Task_2( void *pvParameters );
+static void Task_2_Generator( void *pvParameters );
 static void DD_Scheduler( void *pvParameters );
 static void Monitor_Task( void *pvParameters );
 
@@ -179,10 +181,13 @@ static dd_task_list complete;
 
 static xQueueHandle xMessageQueue = NULL;
 static xQueueHandle xMonitorQueue = NULL;
+static xQueueHandle xCreateQueue = NULL;
+static xQueueHandle xDeleteQueue = NULL;
 xQueueHandle xQueue_handle = 0;
 
 
 TaskHandle_t Periodic_task_gen_handle_1;
+TaskHandle_t Periodic_task_gen_handle_2;
 /*-----------------------------------------------------------*/
 
 int main(void)
@@ -196,14 +201,19 @@ int main(void)
 	xMessageQueue = xQueueCreate(5, sizeof( message ));
 	vQueueAddToRegistry(xMessageQueue, "MessageQueue");
 	xMonitorQueue = xQueueCreate(2, sizeof( message ));
-	vQueueAddToRegistry(xMonitorQueue, "MonitorQueue");
+	vQueueAddToRegistry(xMonitorQueue, "MonitrQueue");
+	xCreateQueue = xQueueCreate(2, sizeof( message ));
+	vQueueAddToRegistry(xCreateQueue, "CreateQueue");
+	xDeleteQueue = xQueueCreate(2, sizeof( message ));
+	vQueueAddToRegistry(xDeleteQueue, "DeleteQueue");
 
-	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
+//	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 
 	xTaskCreate(DD_Scheduler, "DD Scheduler Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_SCHEDULER, NULL);
 	xTaskCreate(Monitor_Task, "Monitor Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_MONITOR, NULL);
 	xTaskCreate(Task_1_Generator, "Periodic Task 1", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_1);
+	xTaskCreate(Task_2_Generator, "Periodic Task 2", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_2);
 
 	vTaskStartScheduler();
 	return 0;
@@ -213,12 +223,12 @@ int main(void)
 /*-----------------------------------------------------------*/
 
 uint32_t dd_create_task(dd_task_node task) {
-	printf("DD_CREATE\n");
+//	printf("DD_CREATE\n");
 	if(task == NULL) {
 		printf("ERROR: task null");
 		return 0;
 	}
-	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
+//	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 	xTaskCreate(task->t_function,
 				task->task_name,
@@ -251,17 +261,21 @@ uint32_t dd_create_task(dd_task_node task) {
 		return 0;
 	}
 
-	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	if(xCreateQueue != NULL) {
+		if(xQueueReceive(xCreateQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
+			vTaskResume(task->t_handle);
+			return 1;
+		}
+	}
 
-	vTaskResume(task->t_handle);
 
-	return 1;
+	return 0;
 }
 
 /*-----------------------------------------------------------*/
 
 uint32_t dd_delete_task(uint32_t task_id) {
-	printf("DD_DELETE\n");
+//	printf("DD_DELETE\n");
 	if(task_id == 0) {
 		printf("ERROR: Null ID");
 		return 0;
@@ -269,8 +283,8 @@ uint32_t dd_delete_task(uint32_t task_id) {
 
 	message newMessage = {
 			DELETE_TASK,
-			task_id,
-			NULL
+			&task_id,
+			task_id
 	};
 
 
@@ -284,11 +298,15 @@ uint32_t dd_delete_task(uint32_t task_id) {
 			return 0;
 	}
 
-	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	if(xDeleteQueue != NULL) {
+		if(xQueueReceive(xDeleteQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
+			return 1;
+		}
+	}
 
 //	vTaskDelete(task->t_handle);
 
-	return 1;
+	return 0;
 }
 
 
@@ -296,7 +314,7 @@ uint32_t dd_delete_task(uint32_t task_id) {
 
 uint32_t dd_return_active_list( void )
 {
-	printf("DD_ACTIVE_LIST\n");
+//	printf("DD_ACTIVE_LIST\n");
 	message newMessage = {
 			GET_ACTIVE,
 			NULL,
@@ -316,6 +334,7 @@ uint32_t dd_return_active_list( void )
 	if(xMonitorQueue != NULL) {
 		if(xQueueReceive(xMonitorQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
 			printf("Active: \n%s\n", (char*)(newMessage.data));
+//			printf("Heap size %u\n", xPortGetFreeHeapSize());
 			vPortFree(newMessage.data);
 			newMessage.data = NULL;
 		}
@@ -328,7 +347,7 @@ uint32_t dd_return_active_list( void )
 
 uint32_t dd_return_overdue_list( void  )
 {
-	printf("DD_OVERDUE_LIST\n");
+//	printf("DD_OVERDUE_LIST\n");
 	message newMessage = {
 				GET_OVERDUE,
 				NULL,
@@ -347,7 +366,8 @@ uint32_t dd_return_overdue_list( void  )
 
 		if(xMonitorQueue != NULL) {
 			if(xQueueReceive(xMonitorQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
-				printf("Overdue: \n%s\n,", (char*)(newMessage.data));
+				printf("Overdue: \n%s\n", (char*)(newMessage.data));
+//				printf("Heap size %u\n", xPortGetFreeHeapSize());
 				vPortFree(newMessage.data);
 				newMessage.data = NULL;
 			}
@@ -358,7 +378,7 @@ uint32_t dd_return_overdue_list( void  )
 
 uint32_t dd_return_complete_list( void )
 {
-	printf("DD_COMPLETE_LIST\n");
+//	printf("DD_COMPLETE_LIST\n");
 	message newMessage = {
 				GET_COMPLETE,
 				NULL,
@@ -377,7 +397,8 @@ uint32_t dd_return_complete_list( void )
 
 		if(xMonitorQueue != NULL) {
 			if(xQueueReceive(xMonitorQueue, &newMessage, portMAX_DELAY) == pdTRUE) {
-				printf("Complete: \n%s\n,", (char*)(newMessage.data));
+				printf("Complete: \n%s\n", (char*)(newMessage.data));
+//				printf("Heap size %u\n", xPortGetFreeHeapSize());
 				vPortFree(newMessage.data);
 				newMessage.data = NULL;
 			}
@@ -397,7 +418,7 @@ static void DD_Scheduler( void *pvParameters )
 	printf("Start Scheduler\n");
 	while(1) {
 		if(xQueueReceive(xMessageQueue, (void*)&res_message, portMAX_DELAY) == pdTRUE) {
-			printf("New message\n");
+//			printf("New message\n");
 			transfer_overdue_list(&active, &overdue);
 
 			while(overdue.list_length > 5) {
@@ -407,33 +428,48 @@ static void DD_Scheduler( void *pvParameters )
 
 			switch(res_message.type) {
 				case(CREATE_TASK): {
-					printf("Create Task\n");
+//					printf("Create Task\n");
 					task_node = (dd_task_node)res_message.data;
 					insert(task_node, &active);
 
-					xTaskNotifyGive(res_message.sender);
+					if(xCreateQueue != NULL) {
+						if(xQueueSend(xCreateQueue, &res_message, (TickType_t) portMAX_DELAY) != pdPASS) {
+							printf("ERROR: couldn't send request");
+							break;
+						}
+					}
 					break;
 				}
 
 				case(DELETE_TASK): {
-					printf("Delete Task\n");
-					task_node = (dd_task_node)res_message.data;
+//					printf("Delete Task\n");
+					uint32_t task_id = (uint32_t)res_message.data; // Data is task_id
+					task_node = findNode(task_id, &active);
+					if(task_node == NULL) {
+						break;
+					}
 					insert(task_node, &complete);
 					removeNode(task_node->task_id, &active, false);
+					vTaskDelete(task_node->t_handle);
 
-					free_node(task_node);
+//					free_node(task_node);
 
-					xTaskNotifyGive(res_message.sender);
+					if(xDeleteQueue != NULL) {
+						if(xQueueSend(xDeleteQueue, &res_message, (TickType_t) portMAX_DELAY) != pdPASS) {
+							printf("ERROR: couldn't send request");
+							break;
+						}
+					}
 					break;
 				}
 
 				case(GET_ACTIVE): {
-					printf("Get active Task\n");
+//					printf("Get active Task\n");
 					res_message.data = (void*)format_list(&active);
 
-//					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
-//						xQueueReset(xMonitorQueue);
-//					}
+					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
+						xQueueReset(xMonitorQueue);
+					}
 
 					if(xMonitorQueue != NULL) {
 						if(xQueueSend(xMonitorQueue, &res_message, (TickType_t) portMAX_DELAY) != pdPASS) {
@@ -446,7 +482,7 @@ static void DD_Scheduler( void *pvParameters )
 				}
 
 				case(GET_OVERDUE): {
-					printf("Get overdue Task\n");
+//					printf("Get overdue Task\n");
 					res_message.data = (void*)format_list(&overdue);
 
 					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
@@ -464,7 +500,7 @@ static void DD_Scheduler( void *pvParameters )
 				}
 
 				case(GET_COMPLETE): {
-					printf("Get complete Task\n");
+//					printf("Get complete Task\n");
 					res_message.data = (void*)format_list(&complete);
 
 					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
@@ -502,18 +538,20 @@ static void Monitor_Task( void *pvParameters )
 
 static void Task_1_Generator( void *pvParameters )
 {
-	printf("Start Task1\n");
+//	printf("Start Task1\n");
 	while (1) {
 
-    dd_task_node task = allocate();
+    dd_task_node task = allocate_node();
+    TickType_t deadline = TASK_1_PERIOD;
 
     task->t_function = Periodic_Task_1;
     task->task_name = "Periodic_Task_1";
     task->type = PERIODIC;
+    task->task_id = 1;
 
     TickType_t current_time = xTaskGetTickCount();
     task->release_time = current_time;
-    task->absolute_deadline = current_time + TASK_1_PERIOD;
+    task->absolute_deadline = current_time + deadline;
 
     dd_create_task(task);
 
@@ -524,20 +562,88 @@ static void Task_1_Generator( void *pvParameters )
 
 void Periodic_Task_1(void *pvParameters) {
   printf("In Periodic task 1\n");
-  TickType_t current_tick = xTaskGetTickCount();
+  dd_task_node self = (dd_task_node)pvParameters;
+  TickType_t current_tick = 0;
   TickType_t previous_tick = 0;
   TickType_t execution_time = TASK_1_EXEC_TIME / portTICK_PERIOD_MS;
+  TickType_t relative_deadline = 0;
+  TickType_t start_time = 0;
+  uint32_t execution_counter = 0;
 //  printf("Task 1 (F-Task Priority: %u; Tick: %u)\n",
 //         (unsigned int)uxTaskPriorityGet(NULL), (unsigned int)current_tick);
-  while (execution_time) {
-    current_tick = xTaskGetTickCount();
-    if (current_tick == previous_tick)
-      continue;
-    previous_tick = current_tick;
-    execution_time--;
+  while(1) {
+	  current_tick = xTaskGetTickCount();
+	  previous_tick = current_tick;
+	  start_time = current_tick;
+	  execution_counter = 0;
+
+	  while(execution_counter < execution_time) {
+		  current_tick = xTaskGetTickCount();
+		  if(current_tick != previous_tick) {
+			  execution_counter++;
+		  }
+		  previous_tick = current_tick;
+	  }
+	  relative_deadline =self->absolute_deadline - current_tick;
+	  vTaskDelayUntil(&current_tick, relative_deadline);
+	  dd_delete_task(1);
   }
   // There's no need to vTaskDelay here. If we're done we're done.
-  dd_delete_task(1);
+}
+
+static void Task_2_Generator( void *pvParameters )
+{
+//	printf("Start Task1\n");
+	while (1) {
+
+    dd_task_node task = allocate_node();
+    TickType_t deadline = TASK_2_PERIOD;
+
+    task->t_function = Periodic_Task_2;
+    task->task_name = "Periodic_Task_2";
+    task->type = PERIODIC;
+    task->task_id = 2;
+
+    TickType_t current_time = xTaskGetTickCount();
+    task->release_time = current_time;
+    task->absolute_deadline = current_time + deadline;
+
+    dd_create_task(task);
+
+    // Delay THIS generator task. Not the created one
+    vTaskDelay(TASK_2_PERIOD);
+  }
+}
+
+void Periodic_Task_2(void *pvParameters) {
+  printf("In Periodic task 2\n");
+  dd_task_node self = (dd_task_node)pvParameters;
+  TickType_t current_tick = 0;
+  TickType_t previous_tick = 0;
+  TickType_t execution_time = TASK_2_EXEC_TIME / portTICK_PERIOD_MS;
+  TickType_t relative_deadline = 0;
+  TickType_t start_time = 0;
+  uint32_t execution_counter = 0;
+//  printf("Task 1 (F-Task Priority: %u; Tick: %u)\n",
+//         (unsigned int)uxTaskPriorityGet(NULL), (unsigned int)current_tick);
+  while(1) {
+	  current_tick = xTaskGetTickCount();
+	  previous_tick = current_tick;
+	  start_time = current_tick;
+	  execution_counter = 0;
+
+	  while(execution_counter < execution_time) {
+		  current_tick = xTaskGetTickCount();
+		  if(current_tick != previous_tick) {
+			  execution_counter++;
+		  }
+		  previous_tick = current_tick;
+	  }
+	  relative_deadline =self->absolute_deadline - current_tick;
+	  vTaskDelayUntil(&current_tick, relative_deadline);
+	  dd_delete_task(2);
+  }
+  // There's no need to vTaskDelay here. If we're done we're done.
 }
 
 
