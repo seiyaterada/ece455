@@ -25,6 +25,7 @@
 # define DD_TASK_PRIORITY_MINIMUM        (1)
 # define DD_TASK_PRIORITY_MONITOR        (2)
 # define DD_TASK_PRIORITY_EXECUTION_BASE (3)
+# define DD_TASK_PRIORITY_HIGH			 (4)
 # define DD_TASK_PRIORITY_GENERATOR      ( configMAX_PRIORITIES - 3 )
 # define DD_TIMER_PRIORITY               ( configMAX_PRIORITIES - 2 )
 # define DD_TASK_PRIORITY_SCHEDULER      ( configMAX_PRIORITIES - 1 ) // set to the highest priority, defined in FreeRTOSConfig.h
@@ -62,7 +63,7 @@ typedef struct message {
 	void *data;
 } message;
 
-dd_task_node allocate();
+dd_task_node allocate_node();
 
 bool free_node(dd_task_node node);
 
@@ -70,6 +71,10 @@ bool free_node(dd_task_node node);
 void create_task_list(dd_task_list_node task_list);
 
 void insert(dd_task_node task, dd_task_list_node task_list);
+
+void insert_complete(dd_task_node task, dd_task_list_node task_list);
+
+dd_task_node findNode(uint32_t taskId, dd_task_list_node task_list);
 
 void removeNode(uint32_t taskId, dd_task_list_node task_list, bool clear);
 
