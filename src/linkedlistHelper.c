@@ -15,8 +15,8 @@
 
 #include "ddTaskHeader.h"
 
-dd_task_node allocate() {
-	dd_task_node newNode = (dd_task_node)pvPortMalloc(sizeof(dd_task_node));
+dd_task_node allocate_node() {
+	dd_task_node newNode = (dd_task_node)pvPortMalloc(sizeof(dd_task));
 
 	newNode->t_handle = NULL;
 	newNode->t_function = NULL;
@@ -61,7 +61,27 @@ void create_task_list(dd_task_list_node task_list) {
 	task_list->list_length = 0;
 	task_list->head = NULL;
 	task_list->tail = NULL;
+//	printf("Created task list\n");
 }
+
+void insert_complete(dd_task_node task, dd_task_list_node task_list) {
+	if(task_list->list_length == 0) {
+		task_list->list_length = 1;
+		task_list->head = task;
+		task_list->tail = task;
+		return;
+	}
+
+	dd_task_node temp = task_list->head;
+
+	task_list->head = task;
+	task->next = temp;
+	task->prev = temp->prev;
+	temp->prev = task;
+	(task_list->list_length)++;
+	return;
+}
+
 
 void insert(dd_task_node task, dd_task_list_node task_list) {
 	// If list is empty
@@ -79,11 +99,16 @@ void insert(dd_task_node task, dd_task_list_node task_list) {
 	// Get highest prio value
 	uint32_t prio = uxTaskPriorityGet(itr->t_handle);
 
+	if((prio + 1) == DD_TASK_PRIORITY_GENERATOR) {
+		printf("ERROR: Reached limit of tasks\n");
+		return;
+	}
+
 	prio++;
 
 	while(itr != NULL) {
-		if(task->absolute_deadline < itr->absolute_deadline) {
-			if(itr == task_list->head) {
+		if(task->absolute_deadline < itr->absolute_deadline) { // Found location
+			if(itr == task_list->head) { // New task has earliest deadline
 				task_list->head = task;
 			}
 
@@ -91,28 +116,46 @@ void insert(dd_task_node task, dd_task_list_node task_list) {
 			task->prev = itr->prev;
 			itr->prev = task;
 
-			task_list->list_length++;
+			(task_list->list_length)++;
 
-			vTaskPrioritySet(task->t_handle, prio);
+			vTaskPrioritySet(task->t_handle, DD_TASK_PRIORITY_HIGH);
 			return;
 		} else {
-			if(itr->next == NULL) {
+			if(itr->next == NULL) { // Reached end of list
 				task->next = NULL;
 				task->prev = itr;
 				itr->next = task;
 				task_list->tail = task;
 
-				task_list->list_length++;
-				vTaskPrioritySet(itr->t_handle, prio);
+				(task_list->list_length)++;
+//				vTaskPrioritySet(itr->t_handle, prio);
 				vTaskPrioritySet(task->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
 				return;
 			}
 
-			vTaskPrioritySet(itr->t_handle, prio);
+			vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
 			prio--;
 			itr = itr->next;
 		}
 	}
+}
+
+dd_task_node findNode(uint32_t taskId, dd_task_list_node task_list) {
+	if(task_list->list_length == 0) {
+		printf("ERROR: List empty");
+		return;
+	}
+
+	dd_task_node itr = task_list->head;
+
+	while(itr != NULL) {
+		if(itr->task_id == taskId) {
+			return itr;
+		}
+		itr = itr->next;
+	}
+	printf("ERROR: Could not find node\n");
+	return;
 }
 
 void removeNode(uint32_t taskId, dd_task_list_node task_list, bool clear) {
@@ -133,6 +176,7 @@ void removeNode(uint32_t taskId, dd_task_list_node task_list, bool clear) {
 				task_list->tail = NULL;
 			} else if(task_list->head->task_id == taskId) {
 				task_list->head = itr->next;
+				vTaskPrioritySet(task_list->head->t_handle, DD_TASK_PRIORITY_HIGH);
 				itr->next->prev = NULL;
 			} else if(task_list->tail->task_id == taskId) {
 				task_list->head = itr->prev;
@@ -159,16 +203,16 @@ void removeNode(uint32_t taskId, dd_task_list_node task_list, bool clear) {
 		itr = itr->next;
 	}
 
-	itr = task_list->tail;
-	vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
-	prio = DD_TASK_PRIORITY_EXECUTION_BASE;
-
-	while(itr->prev != NULL) {
-		prio++;
-		itr = itr->prev;
-		vTaskPrioritySet(itr->t_handle, prio);
-	}
-	return;
+//	itr = task_list->tail;
+//	vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
+//	prio = DD_TASK_PRIORITY_EXECUTION_BASE;
+//
+//	while(itr->prev != NULL) {
+//		prio++;
+//		itr = itr->prev;
+//		vTaskPrioritySet(itr->t_handle, prio);
+//	}
+//	return;
 }
 
 void remove_head(dd_task_list_node task_list) {
@@ -197,12 +241,13 @@ void remove_head(dd_task_list_node task_list) {
 
 void transfer_overdue_list(dd_task_list_node active, dd_task_list_node overdue) {
 	dd_task_node itr = active->head;
+	uint32_t itrId = itr->task_id;
 
 	TickType_t time = xTaskGetTickCount();
 
 	while(itr != NULL) {
 		if(itr->absolute_deadline < time) {
-			removeNode(itr, active, false);
+			removeNode(itrId, active, false);
 
 			if(overdue->list_length == 0) {
 				overdue->list_length = 1;
@@ -226,6 +271,7 @@ void transfer_overdue_list(dd_task_list_node active, dd_task_list_node overdue) 
 		}
 
 		itr = itr->next;
+		itrId = itr->task_id;
 	}
 }
 
