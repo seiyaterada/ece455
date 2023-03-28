@@ -23,7 +23,7 @@
 
 # define DD_TASK_PRIORITY_IDLE           (0)
 # define DD_TASK_PRIORITY_MINIMUM        (1)
-# define DD_TASK_PRIORITY_MONITOR        (2)
+# define DD_TASK_PRIORITY_MONITOR        (4)
 # define DD_TASK_PRIORITY_EXECUTION_BASE (3)
 # define DD_TASK_PRIORITY_HIGH			 (4)
 # define DD_TASK_PRIORITY_GENERATOR      ( configMAX_PRIORITIES - 3 )
@@ -72,7 +72,7 @@ void create_task_list(dd_task_list_node task_list);
 
 void insert(dd_task_node task, dd_task_list_node task_list);
 
-void insert_complete(dd_task_node task, dd_task_list_node task_list);
+//void insert_complete(dd_task_node task, dd_task_list_node task_list);
 
 dd_task_node findNode(uint32_t taskId, dd_task_list_node task_list);
 
@@ -81,6 +81,8 @@ void removeNode(uint32_t taskId, dd_task_list_node task_list, bool clear);
 void remove_head(dd_task_list_node task_list);
 
 void transfer_overdue_list(dd_task_list_node active, dd_task_list_node overdue);
+
+char* format_complete_list(dd_task_list_node task_list);
 
 char* format_list(dd_task_list_node task_list);
 
