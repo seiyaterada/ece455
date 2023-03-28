@@ -169,6 +169,8 @@ static void Periodic_Task_1( void *pvParameters );
 static void Task_1_Generator( void *pvParameters );
 static void Periodic_Task_2( void *pvParameters );
 static void Task_2_Generator( void *pvParameters );
+static void Periodic_Task_3( void *pvParameters );
+static void Task_3_Generator( void *pvParameters );
 static void DD_Scheduler( void *pvParameters );
 static void Monitor_Task( void *pvParameters );
 
@@ -188,6 +190,7 @@ xQueueHandle xQueue_handle = 0;
 
 TaskHandle_t Periodic_task_gen_handle_1;
 TaskHandle_t Periodic_task_gen_handle_2;
+TaskHandle_t Periodic_task_gen_handle_3;
 /*-----------------------------------------------------------*/
 
 int main(void)
@@ -198,13 +201,13 @@ int main(void)
 	create_task_list(&overdue);
 	create_task_list(&complete);
 
-	xMessageQueue = xQueueCreate(5, sizeof( message ));
+	xMessageQueue = xQueueCreate(10, sizeof( message ));
 	vQueueAddToRegistry(xMessageQueue, "MessageQueue");
 	xMonitorQueue = xQueueCreate(2, sizeof( message ));
 	vQueueAddToRegistry(xMonitorQueue, "MonitrQueue");
-	xCreateQueue = xQueueCreate(2, sizeof( message ));
+	xCreateQueue = xQueueCreate(10, sizeof( message ));
 	vQueueAddToRegistry(xCreateQueue, "CreateQueue");
-	xDeleteQueue = xQueueCreate(2, sizeof( message ));
+	xDeleteQueue = xQueueCreate(10, sizeof( message ));
 	vQueueAddToRegistry(xDeleteQueue, "DeleteQueue");
 
 //	printf("Free heap size: %u bytes\n", xPortGetFreeHeapSize());
@@ -214,6 +217,7 @@ int main(void)
 	xTaskCreate(Monitor_Task, "Monitor Task", configMINIMAL_STACK_SIZE, NULL, DD_TASK_PRIORITY_MONITOR, NULL);
 	xTaskCreate(Task_1_Generator, "Periodic Task 1", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_1);
 	xTaskCreate(Task_2_Generator, "Periodic Task 2", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_2);
+	xTaskCreate(Task_3_Generator, "Periodic Task 3", configMINIMAL_STACK_SIZE, NULL,DD_TASK_PRIORITY_GENERATOR, &Periodic_task_gen_handle_3);
 
 	vTaskStartScheduler();
 	return 0;
@@ -445,11 +449,11 @@ static void DD_Scheduler( void *pvParameters )
 //					printf("Delete Task\n");
 					uint32_t task_id = (uint32_t)res_message.data; // Data is task_id
 					task_node = findNode(task_id, &active);
-					if(task_node == NULL) {
+					if(task_node->task_id == 0) {
 						break;
 					}
-					insert(task_node, &complete);
 					removeNode(task_node->task_id, &active, false);
+					insert(task_node, &complete);
 					vTaskDelete(task_node->t_handle);
 
 //					free_node(task_node);
@@ -545,7 +549,7 @@ static void Task_1_Generator( void *pvParameters )
     TickType_t deadline = TASK_1_PERIOD;
 
     task->t_function = Periodic_Task_1;
-    task->task_name = "Periodic_Task_1";
+    task->task_name = "1_Periodic_Task";
     task->type = PERIODIC;
     task->task_id = 1;
 
@@ -561,7 +565,7 @@ static void Task_1_Generator( void *pvParameters )
 }
 
 void Periodic_Task_1(void *pvParameters) {
-  printf("In Periodic task 1\n");
+//  printf("In Periodic task 1\n");
   dd_task_node self = (dd_task_node)pvParameters;
   TickType_t current_tick = 0;
   TickType_t previous_tick = 0;
@@ -600,7 +604,7 @@ static void Task_2_Generator( void *pvParameters )
     TickType_t deadline = TASK_2_PERIOD;
 
     task->t_function = Periodic_Task_2;
-    task->task_name = "Periodic_Task_2";
+    task->task_name = "2_Periodic_Task";
     task->type = PERIODIC;
     task->task_id = 2;
 
@@ -616,7 +620,7 @@ static void Task_2_Generator( void *pvParameters )
 }
 
 void Periodic_Task_2(void *pvParameters) {
-  printf("In Periodic task 2\n");
+//  printf("In Periodic task 2\n");
   dd_task_node self = (dd_task_node)pvParameters;
   TickType_t current_tick = 0;
   TickType_t previous_tick = 0;
@@ -645,6 +649,62 @@ void Periodic_Task_2(void *pvParameters) {
   }
   // There's no need to vTaskDelay here. If we're done we're done.
 }
+
+static void Task_3_Generator( void *pvParameters )
+{
+//	printf("Start Task1\n");
+	while (1) {
+
+    dd_task_node task = allocate_node();
+    TickType_t deadline = TASK_3_PERIOD;
+
+    task->t_function = Periodic_Task_3;
+    task->task_name = "3_Periodic_Task";
+    task->type = PERIODIC;
+    task->task_id = 3;
+
+    TickType_t current_time = xTaskGetTickCount();
+    task->release_time = current_time;
+    task->absolute_deadline = current_time + deadline;
+
+    dd_create_task(task);
+
+    // Delay THIS generator task. Not the created one
+    vTaskDelay(TASK_3_PERIOD);
+  }
+}
+
+void Periodic_Task_3(void *pvParameters) {
+//  printf("In Periodic task 3\n");
+  dd_task_node self = (dd_task_node)pvParameters;
+  TickType_t current_tick = 0;
+  TickType_t previous_tick = 0;
+  TickType_t execution_time = TASK_3_EXEC_TIME / portTICK_PERIOD_MS;
+  TickType_t relative_deadline = 0;
+  TickType_t start_time = 0;
+  uint32_t execution_counter = 0;
+//  printf("Task 1 (F-Task Priority: %u; Tick: %u)\n",
+//         (unsigned int)uxTaskPriorityGet(NULL), (unsigned int)current_tick);
+  while(1) {
+	  current_tick = xTaskGetTickCount();
+	  previous_tick = current_tick;
+	  start_time = current_tick;
+	  execution_counter = 0;
+
+	  while(execution_counter < execution_time) {
+		  current_tick = xTaskGetTickCount();
+		  if(current_tick != previous_tick) {
+			  execution_counter++;
+		  }
+		  previous_tick = current_tick;
+	  }
+	  relative_deadline =self->absolute_deadline - current_tick;
+	  vTaskDelayUntil(&current_tick, relative_deadline);
+	  dd_delete_task(3);
+  }
+  // There's no need to vTaskDelay here. If we're done we're done.
+}
+
 
 
 /*-----------------------------------------------------------*/
