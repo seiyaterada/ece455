@@ -64,30 +64,7 @@ void create_task_list(dd_task_list_node task_list) {
 	task_list->list_length = 0;
 	task_list->head = NULL;
 	task_list->tail = NULL;
-//	printf("Created task list\n");
 }
-
-//// Inserts task into completed list
-//void insert_complete(dd_task_node task, dd_task_list_node task_list) {
-//	if(task_list->list_length == 0) {
-//		task_list->list_length = 1;
-//		task_list->head = task;
-//		task_list->tail = task;
-//		return;
-//	}
-//
-//	dd_task_node insertTask = task;
-//
-//	dd_task_node temp = task_list->head;
-//
-//	task_list->head = insertTask;
-//	insertTask->next = temp;
-//	insertTask->prev = temp->prev;
-//	temp->prev = insertTask;
-//	(task_list->list_length)++;
-//	return;
-//}
-
 
 // Insert task into list
 void insert(dd_task_node task, dd_task_list_node task_list) {
