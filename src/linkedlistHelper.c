@@ -94,6 +94,7 @@ void insert(dd_task_node task, dd_task_list_node task_list) {
 			(task_list->list_length)++;
 
 			vTaskPrioritySet(task->t_handle, DD_TASK_PRIORITY_HIGH);
+			vTaskPrioritySet(task_list->head->t_handle, DD_TASK_PRIORITY_HIGH);
 			return;
 		} else {
 			if(itr->next == NULL) { // Reached end of list
@@ -110,6 +111,12 @@ void insert(dd_task_node task, dd_task_list_node task_list) {
 
 			vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
 			itr = itr->next;
+		}
+	}
+	itr = task_list->head;
+	while(itr != NULL) {
+		if(itr != task_list->head) {
+			vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
 		}
 	}
 }
