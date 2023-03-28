@@ -72,12 +72,14 @@ void insert_complete(dd_task_node task, dd_task_list_node task_list) {
 		return;
 	}
 
+	dd_task_node insertTask = task;
+
 	dd_task_node temp = task_list->head;
 
-	task_list->head = task;
-	task->next = temp;
-	task->prev = temp->prev;
-	temp->prev = task;
+	task_list->head = insertTask;
+	insertTask->next = temp;
+	insertTask->prev = temp->prev;
+	temp->prev = insertTask;
 	(task_list->list_length)++;
 	return;
 }
@@ -95,16 +97,6 @@ void insert(dd_task_node task, dd_task_list_node task_list) {
 
 	// If list is not empty iterate through list and place task in right place
 	dd_task_node itr = task_list->head;
-
-	// Get highest prio value
-	uint32_t prio = uxTaskPriorityGet(itr->t_handle);
-
-	if((prio + 1) == DD_TASK_PRIORITY_GENERATOR) {
-		printf("ERROR: Reached limit of tasks\n");
-		return;
-	}
-
-	prio++;
 
 	while(itr != NULL) {
 		if(task->absolute_deadline < itr->absolute_deadline) { // Found location
@@ -130,11 +122,11 @@ void insert(dd_task_node task, dd_task_list_node task_list) {
 				(task_list->list_length)++;
 //				vTaskPrioritySet(itr->t_handle, prio);
 				vTaskPrioritySet(task->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
+				vTaskPrioritySet(task_list->head->t_handle, DD_TASK_PRIORITY_HIGH);
 				return;
 			}
 
 			vTaskPrioritySet(itr->t_handle, DD_TASK_PRIORITY_EXECUTION_BASE);
-			prio--;
 			itr = itr->next;
 		}
 	}
