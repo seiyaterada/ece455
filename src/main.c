@@ -202,6 +202,7 @@ static dd_task_list overdue;
 static dd_task_list complete;
 
 
+
 static xQueueHandle xMessageQueue = NULL;
 static xQueueHandle xMonitorQueue = NULL;
 static xQueueHandle xCreateQueue = NULL;
@@ -468,6 +469,7 @@ static void DD_Scheduler( void *pvParameters )
 				case(CREATE_TASK): {
 					// Get task node from message
 					task_node = (dd_task_node)res_message.data;
+					printf("%s released at time: %u\n", task_node->task_name, task_node->release_time);
 					// Insert task into correct spot in active list
 					insert(task_node, &active);
 
@@ -500,9 +502,10 @@ static void DD_Scheduler( void *pvParameters )
 					insert(task_node, &complete);
 
 					// Delete task
+					printf("%s completed at time: %u\n", task_node->task_name, task_node->completion_time);
 					vTaskDelete(task_node->t_handle);
 
-//					free_node(task_node);
+					free_node(task_node);
 
 					// Send response back to dd_create via delete queue
 					if(xDeleteQueue != NULL) {
@@ -556,7 +559,8 @@ static void DD_Scheduler( void *pvParameters )
 
 				case(GET_COMPLETE): {
 					// Store formatted list in message data
-					res_message.data = (void*)format_complete_list(&complete);
+//					res_message.data = (void*)format_complete_list(&complete);
+					res_message.data = (void*)complete.list_length;
 
 					// Check if there is enough room in queue, if not reset
 					if(uxQueueSpacesAvailable(xMonitorQueue) == 0) {
@@ -581,11 +585,9 @@ static void DD_Scheduler( void *pvParameters )
 
 static void Monitor_Task( void *pvParameters )
 {
-	printf("Start Monitor Task\n");
+//	printf("Start Monitor Task\n");
 //	vTaskDelay(1000);
 	while(1) {
-//		printf("\nMonitoring Task: Current Time = %u, Priority = %u\n", (unsigned int)xTaskGetTickCount(), (unsigned int)uxTaskPriorityGet( NULL ));
-		// Call the dd list tasks to print the lists
 		dd_return_active_list();
 		dd_return_overdue_list();
 		dd_return_complete_list();
@@ -645,10 +647,7 @@ void Periodic_Task_1(void *pvParameters) {
 		  }
 		  previous_tick = current_tick;
 	  }
-//	  relative_deadline = self->absolute_deadline - current_tick;
-//	  if(relative_deadline != 0) {
-//		  vTaskDelayUntil(&current_tick, relative_deadline);
-//	  }
+
 	  // Start dd task
 	  dd_delete_task(1);
   }
@@ -700,10 +699,7 @@ void Periodic_Task_2(void *pvParameters) {
 		  }
 		  previous_tick = current_tick;
 	  }
-//	  relative_deadline =self->absolute_deadline - current_tick;
-//	  if(relative_deadline != 0) {
-//		  vTaskDelayUntil(&current_tick, relative_deadline);
-//	  }
+
 	  dd_delete_task(2);
   }
   // There's no need to vTaskDelay here. If we're done we're done.
@@ -754,10 +750,7 @@ void Periodic_Task_3(void *pvParameters) {
 		  }
 		  previous_tick = current_tick;
 	  }
-//	  relative_deadline =self->absolute_deadline - current_tick;
-//	  if(relative_deadline != 0) {
-//		  vTaskDelayUntil(&current_tick, relative_deadline);
-//	  }
+
 	  dd_delete_task(3);
   }
   // There's no need to vTaskDelay here. If we're done we're done.
